@@ -1,0 +1,6 @@
+# Object order (net pins, instance pins, ids) as OpenSTA's reader makes it.
+read_liberty -lib test/simple.lib
+read_verilog test/order.v
+hierarchy -top top
+opensta_net -liberty test/simple.lib -link
+opensta_net -source test/order_body.tcl

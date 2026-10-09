@@ -28,6 +28,9 @@ std::string staNetName(const Netlist &netlist, const Netlist::Net *net);
 sta::PortDirection *staDirection(Netlist::Dir dir);
 Netlist::Dir netlistDir(const sta::PortDirection *dir);
 
+// Order of ConcreteNetwork
+void reversePortRuns(std::vector<Netlist::Pin *> &pins);
+
 // Claim of an STA net name by the source bit that gives it. Canonical names
 // beat aliases, then the smallest bit wins
 struct NameClaim {

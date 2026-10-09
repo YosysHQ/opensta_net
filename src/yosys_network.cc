@@ -106,6 +106,18 @@ Netlist::Dir detail::netlistDir(const sta::PortDirection *dir)
 	return Netlist::Dir::Unknown;
 }
 
+void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
+{
+	size_t begin = 0;
+	while (begin < pins.size()) {
+		size_t end = begin + 1;
+		while (end < pins.size() && pins[end]->inst == pins[begin]->inst && pins[end]->port == pins[begin]->port)
+			end++;
+		std::reverse(pins.begin() + begin, pins.begin() + end);
+		begin = end;
+	}
+}
+
 bool detail::NameClaim::operator<(const NameClaim &other) const
 {
 	return std::tie(alias, wire, index) < std::tie(other.alias, other.wire, other.index);
@@ -399,7 +411,9 @@ sta::InstanceChildIterator *YosysNetwork::childIterator(const sta::Instance *ins
 
 sta::InstancePinIterator *YosysNetwork::pinIterator(const sta::Instance *instance) const
 {
-	return detail::castIterator<sta::Pin *>(asInst(instance)->pins);
+	std::vector<YPin *> pins = asInst(instance)->pins;
+	detail::reversePortRuns(pins);
+	return detail::castIterator<sta::Pin *>(pins);
 }
 
 // Name order, aliases skipped
@@ -502,14 +516,19 @@ sta::Instance *YosysNetwork::instance(const sta::Net *net) const
 	return reinterpret_cast<sta::Instance *>(asNet(net)->scope);
 }
 
+// ConcreteNet prepends each connected pin and term
 sta::NetPinIterator *YosysNetwork::pinIterator(const sta::Net *net) const
 {
-	return detail::castIterator<const sta::Pin *>(asNet(net)->pins);
+	const std::vector<YPin *> &pins = asNet(net)->pins;
+	std::vector<YPin *> seq(pins.rbegin(), pins.rend());
+	detail::reversePortRuns(seq);
+	return detail::castIterator<const sta::Pin *>(seq);
 }
 
 sta::NetTermIterator *YosysNetwork::termIterator(const sta::Net *net) const
 {
-	return detail::castIterator<sta::Term *>(asNet(net)->terms);
+	const std::vector<YTerm *> &terms = asNet(net)->terms;
+	return detail::castIterator<sta::Term *>(std::vector<YTerm *>(terms.rbegin(), terms.rend()));
 }
 
 bool YosysNetwork::isPower(const sta::Net *net) const

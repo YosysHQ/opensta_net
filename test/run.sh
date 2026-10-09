@@ -80,6 +80,7 @@ expect nets_exact test/nets_exact.tcl '^EQUAL 1$' '^FAST 1$'
 # Same timing, names and order as the reference binary on the same netlist
 ref handoff HANDOFF test/handoff.ys test/handoff_ref.tcl slack
 ref barrier BARRIER test/barrier.ys test/barrier_ref.tcl 'slack \(MET\)'
+ref order ORDER test/order.ys test/order_ref.tcl
 # Constant nets are zero_/one_, so OpenSTA's write_verilog keeps them
 ref const CONST test/const.ys test/const_ref.tcl
 same const_handoff "$(sta test/const_ref.tcl | between CONST)" "$(sta test/const_handoff.tcl | between CONST)"

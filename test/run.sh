@@ -72,6 +72,8 @@ ref() {
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
 expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
+# An assign-to-constant wire is an alias of the constant net
+expect tie test/tie.ys 'tie nets: 1'
 # Exact get_nets is one lookup: same nets as the wildcard scan, about as fast as get_cells
 expect nets_exact test/nets_exact.tcl '^EQUAL 1$' '^FAST 1$'
 
@@ -85,6 +87,10 @@ same const_handoff "$(sta test/const_ref.tcl | between CONST)" "$(sta test/const
 for t in bus bus_asc; do
 	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"
 done
+# The diff to the reference is exactly the documented alias-collapse deviation
+stress_ref=$(sta test/stress_ref.tcl | sed 's/line [0-9]*/line N/')
+stress_out=$(run test/stress.ys | sed -n '/^--- ports ---$/,$p' | sed '/^End of script/,$d' | sed 's/line [0-9]*/line N/')
+check stress cmp -s <(diff <(echo "$stress_ref") <(echo "$stress_out")) test/stress_waiver
 
 # Robustness: each check failed before its fix
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'

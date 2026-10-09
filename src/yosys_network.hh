@@ -6,6 +6,7 @@
 #include "sta/ConcreteNetwork.hh"
 
 #include <map>
+#include <set>
 #include <unordered_map>
 
 namespace ysta {
@@ -27,10 +28,11 @@ std::string staNetName(const Netlist &netlist, const Netlist::Net *net);
 sta::PortDirection *staDirection(Netlist::Dir dir);
 Netlist::Dir netlistDir(const sta::PortDirection *dir);
 
-// Claim of an STA net name by the source bit that gives it. The smallest bit
-// wins
+// Claim of an STA net name by the source bit that gives it. Canonical names
+// beat aliases, then the smallest bit wins
 struct NameClaim {
 	Netlist::Net *net = nullptr;
+	bool alias = false;
 	std::string wire;
 	int index = 0;
 	bool operator<(const NameClaim &other) const;

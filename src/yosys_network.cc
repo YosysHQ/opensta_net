@@ -108,15 +108,15 @@ Netlist::Dir detail::netlistDir(const sta::PortDirection *dir)
 
 bool detail::NameClaim::operator<(const NameClaim &other) const
 {
-	return std::tie(wire, index) < std::tie(other.wire, other.index);
+	return std::tie(alias, wire, index) < std::tie(other.alias, other.wire, other.index);
 }
 
 detail::NameClaim detail::netClaim(const Netlist &netlist, Netlist::Net *net)
 {
 	if (net->constant != Netlist::Net::Const::None)
-		return {net, "", int(net->constant)};
+		return {net, false, "", int(net->constant)};
 	Netlist::NetName name = netlist.wireName(net);
-	return {net, name.wire, name.index};
+	return {net, false, name.wire, name.index};
 }
 
 void detail::addClaim(NetNames &names, const std::string &name, const NameClaim &claim)
@@ -126,10 +126,15 @@ void detail::addClaim(NetNames &names, const std::string &name, const NameClaim 
 		it->second = claim;
 }
 
+// Canonical names, then each public wire bit
 void detail::scopeNetNames(const Netlist &netlist, const Netlist::Instance *scope, NetNames &names)
 {
 	for (Netlist::Net *net : netlist.nets(scope))
 		detail::addClaim(names, detail::staNetName(netlist, net), detail::netClaim(netlist, net));
+	for (const Netlist::Alias &alias : netlist.aliases(scope)) {
+		NameClaim claim = {alias.net, true, alias.name.wire, alias.name.index};
+		detail::addClaim(names, detail::staWireName(alias.name), claim);
+	}
 }
 
 void detail::scopeChildNames(const Netlist::Instance *scope, ChildNames &children)
@@ -397,12 +402,14 @@ sta::InstancePinIterator *YosysNetwork::pinIterator(const sta::Instance *instanc
 	return detail::castIterator<sta::Pin *>(asInst(instance)->pins);
 }
 
-// Name order
+// Name order, aliases skipped
 sta::InstanceNetIterator *YosysNetwork::netIterator(const sta::Instance *instance) const
 {
 	std::vector<YNet *> nets;
-	for (const auto &[name, claim] : net_names_.get(asInst(instance)->id))
-		nets.push_back(claim.net);
+	for (const auto &[name, claim] : net_names_.get(asInst(instance)->id)) {
+		if (!claim.alias)
+			nets.push_back(claim.net);
+	}
 	return detail::castIterator<sta::Net *>(nets);
 }
 
@@ -483,8 +490,9 @@ void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta
 			matches.push_back(net);
 		return;
 	}
+	std::set<const YNet *> seen;
 	for (const auto &[name, claim] : net_names_.get(asInst(instance)->id)) {
-		if (pattern->match(name))
+		if (pattern->match(name) && seen.insert(claim.net).second)
 			matches.push_back(reinterpret_cast<sta::Net *>(claim.net));
 	}
 }

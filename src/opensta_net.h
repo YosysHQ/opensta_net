@@ -2,11 +2,14 @@
 #define OPENSTA_NET_H
 
 #include "kernel/yosys.h"
+#include "kernel/netview.h"
 
 #include <tcl.h>
 
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
+
+#include "yosys_network.hh"
 
 namespace opensta_net {
 
@@ -24,17 +27,28 @@ struct YosysStaReport : public sta::ReportTcl {
 };
 
 struct YosysSta : public sta::Sta {
+	ysta::YosysNetwork *yosys_network = nullptr;
+	Yosys::NetView view;
 	Yosys::pool<std::string> liberty_files_read;
 public:
 	void makeReport() override;
+	void makeNetwork() override;
 };
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
+	bool link = false;
 };
 
 // Tcl
 bool tclEval(const std::string &script);
+
+// Build
+void countScope(const Yosys::Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins);
+void logCounts(long ms);
+void dropView();
+bool linkView(Design *design, std::string &error);
+void linkDesign(Design *design);
 
 // Boot
 void makeSta();

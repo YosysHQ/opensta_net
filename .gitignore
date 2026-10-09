@@ -1,1 +1,3 @@
 *.so
+test/*_out.sdc
+test/*_out.v

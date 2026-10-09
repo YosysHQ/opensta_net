@@ -71,8 +71,23 @@ ref() {
 
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
+expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
+# Exact get_nets is one lookup: same nets as the wildcard scan, about as fast as get_cells
+expect nets_exact test/nets_exact.tcl '^EQUAL 1$' '^FAST 1$'
+
+# Same timing, names and order as the reference binary on the same netlist
+ref handoff HANDOFF test/handoff.ys test/handoff_ref.tcl slack
+ref barrier BARRIER test/barrier.ys test/barrier_ref.tcl 'slack \(MET\)'
+# Bused leaf-cell bit binding, descending and ascending liberty buses
+for t in bus bus_asc; do
+	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"
+done
+
 # Robustness: each check failed before its fix
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
+expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
+expect eval_quotes test/eval_quotes.ys '^42$'
+expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'
 
 echo "---"
 echo "pass=$pass fail=$fail"

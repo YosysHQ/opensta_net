@@ -40,9 +40,74 @@ void YosysSta::makeReport()
 	report_ = new YosysStaReport;
 }
 
+void YosysSta::makeNetwork()
+{
+	yosys_network = new ysta::YosysNetwork;
+	network_ = yosys_network;
+}
+
 bool tclEval(const std::string &script)
 {
 	return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK;
+}
+
+void countScope(const Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins)
+{
+	nets += the_sta->view.nets(scope).size();
+	for (const Netlist::Instance *child : scope->children) {
+		insts++;
+		pins += child->pins.size();
+		if (!child->leaf)
+			countScope(child, insts, nets, pins);
+	}
+}
+
+void logCounts(long ms)
+{
+	size_t insts = 0;
+	size_t nets = 0;
+	size_t pins = the_sta->view.top()->pins.size();
+	countScope(the_sta->view.top(), insts, nets, pins);
+	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
+}
+
+void dropView()
+{
+	ysta::YosysNetwork *network = the_sta->yosys_network;
+	if (network->linked()) {
+		the_sta->networkChanged();
+		network->unlink();
+	}
+	the_sta->view.reset();
+}
+
+bool linkView(Design *design, std::string &error)
+{
+	dropView();
+	auto t0 = std::chrono::steady_clock::now();
+	ysta::YosysNetwork *network = the_sta->yosys_network;
+	network->attach(&the_sta->view);
+	try {
+		the_sta->view.build(design, network);
+		network->link();
+	} catch (const sta::Exception &exception) {
+		network->unlink();
+		the_sta->view.reset();
+		error = exception.what();
+		return false;
+	}
+	auto elapsed = std::chrono::steady_clock::now() - t0;
+	logCounts(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+	return true;
+}
+
+void linkDesign(Design *design)
+{
+	std::string reason;
+	if (!NetView::buildable(design, reason))
+		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
+	if (!linkView(design, reason))
+		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
 }
 
 void makeSta()
@@ -73,12 +138,18 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 {
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
+	const std::map<std::string, bool *> flags = {{"-link", &opt.link}};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
-		auto value = values.find(args[argidx]);
-		if (value == values.end() || argidx + 1 >= args.size())
+		const std::string &arg = args[argidx];
+		auto value = values.find(arg);
+		auto flag = flags.find(arg);
+		if (value != values.end() && argidx + 1 < args.size())
+			*value->second = args[++argidx];
+		else if (flag != flags.end())
+			*flag->second = true;
+		else
 			break;
-		*value->second = args[++argidx];
 	}
 	opt.eval_cmd = unquote(opt.eval_cmd);
 	return argidx;
@@ -141,10 +212,15 @@ void OpenstaNetPass::help()
 	log("\n");
 	log("    opensta_net [options]\n");
 	log("\n");
-	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter.\n");
+	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter over a netlist\n");
+	log("view of the design.\n");
 	log("\n");
 	log("    -liberty <file>\n");
 	log("        read a liberty file into OpenSTA.\n");
+	log("\n");
+	log("    -link\n");
+	log("        build the view from scratch (every module instantiated once: run\n");
+	log("        uniquify or flatten first). Constraints are cleared.\n");
 	log("\n");
 	log("    -sdc <file>\n");
 	log("        source an SDC file in the shared interpreter.\n");
@@ -167,6 +243,8 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	bootSta();
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
+	if (opt.link)
+		linkDesign(design);
 	if (!opt.sdc_file.empty())
 		checkSourced(sourceFile(opt.sdc_file, true), opt.sdc_file);
 	if (!opt.source_file.empty())

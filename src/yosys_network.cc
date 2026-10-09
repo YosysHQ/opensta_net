@@ -60,14 +60,32 @@ std::string detail::staUnescape(std::string_view name)
 	return result;
 }
 
+// {"u1", "r"} -> u1\/r, as the reference reader stores the flat identifier \u1/r
+std::string detail::staPath(const std::vector<std::string> &path)
+{
+	std::string result;
+	for (const std::string &part : path) {
+		if (!result.empty())
+			result += "\\/";
+		result += detail::staName(part);
+	}
+	return result;
+}
+
 std::string detail::staInstName(const Netlist::Instance *inst)
 {
-	return detail::staName(inst->name);
+	if (inst->hdlpath.empty())
+		return detail::staName(inst->name);
+	return detail::staPath(inst->hdlpath);
 }
 
 std::string detail::staWireName(const Netlist::NetName &name)
 {
-	std::string base = detail::staName(name.wire);
+	std::string base;
+	if (name.hdlpath.empty())
+		base = detail::staName(name.wire);
+	else
+		base = detail::staPath(name.hdlpath);
 	if (name.scalar)
 		return base;
 	return base + "[" + std::to_string(name.index) + "]";
@@ -138,21 +156,27 @@ void detail::addClaim(NetNames &names, const std::string &name, const NameClaim 
 		it->second = claim;
 }
 
-// Canonical names, then each public wire bit
+// Canonical names, then each public wire bit by source path and by host
+// name
 void detail::scopeNetNames(const Netlist &netlist, const Netlist::Instance *scope, NetNames &names)
 {
 	for (Netlist::Net *net : netlist.nets(scope))
 		detail::addClaim(names, detail::staNetName(netlist, net), detail::netClaim(netlist, net));
 	for (const Netlist::Alias &alias : netlist.aliases(scope)) {
 		NameClaim claim = {alias.net, true, alias.name.wire, alias.name.index};
+		Netlist::NetName host = alias.name;
+		host.hdlpath.clear();
 		detail::addClaim(names, detail::staWireName(alias.name), claim);
+		detail::addClaim(names, detail::staWireName(host), claim);
 	}
 }
 
 void detail::scopeChildNames(const Netlist::Instance *scope, ChildNames &children)
 {
-	for (Netlist::Instance *child : scope->children)
+	for (Netlist::Instance *child : scope->children) {
 		children[detail::staInstName(child)] = child;
+		children.emplace(detail::staName(child->name), child);
+	}
 }
 
 const YInstance *YosysNetwork::asInst(const sta::Instance *inst)
@@ -400,12 +424,14 @@ sta::Pin *YosysNetwork::findPin(const sta::Instance *instance, const sta::Libert
 	return reinterpret_cast<sta::Pin *>(detail::lookup(pin_names_.get(asInst(instance)->id), port->name()));
 }
 
-// Name order
+// Name order, host-name aliases skipped
 sta::InstanceChildIterator *YosysNetwork::childIterator(const sta::Instance *instance) const
 {
 	std::vector<YInstance *> children;
-	for (const auto &[name, child] : child_names_.get(asInst(instance)->id))
-		children.push_back(child);
+	for (const auto &[name, child] : child_names_.get(asInst(instance)->id)) {
+		if (name == detail::staInstName(child))
+			children.push_back(child);
+	}
 	return detail::castIterator<sta::Instance *>(children);
 }
 

@@ -22,6 +22,7 @@ namespace detail {
 // Names
 std::string staName(std::string_view raw);
 std::string staUnescape(std::string_view name);
+std::string staPath(const std::vector<std::string> &path);
 std::string staInstName(const Netlist::Instance *inst);
 std::string staWireName(const Netlist::NetName &name);
 std::string staNetName(const Netlist &netlist, const Netlist::Net *net);

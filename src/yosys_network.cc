@@ -209,6 +209,7 @@ void YosysNetwork::unlink()
 	child_names_.clear();
 	net_names_.clear();
 	pin_names_.clear();
+	scopes_.clear();
 	clearNetDrvrPinMap();
 }
 
@@ -241,6 +242,7 @@ void YosysNetwork::buildTables(YInstance *scope)
 		indexPins(child);
 	}
 	detail::scopeNetNames(*netlist_, scope, net_names_[scope->id]);
+	scopes_.push_back(scope);
 }
 
 sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const
@@ -500,6 +502,29 @@ sta::NetPinIterator *YosysNetwork::pinIterator(const sta::Net *net) const
 sta::NetTermIterator *YosysNetwork::termIterator(const sta::Net *net) const
 {
 	return detail::castIterator<sta::Term *>(asNet(net)->terms);
+}
+
+bool YosysNetwork::isPower(const sta::Net *net) const
+{
+	return asNet(net)->constant == Netlist::Net::Const::One;
+}
+
+bool YosysNetwork::isGround(const sta::Net *net) const
+{
+	return asNet(net)->constant == Netlist::Net::Const::Zero;
+}
+
+sta::ConstantPinIterator *YosysNetwork::constantPinIterator()
+{
+	sta::NetSet zero_nets(this);
+	sta::NetSet one_nets(this);
+	for (YInstance *scope : scopes_) {
+		if (YNet *net = netlist_->constNet(scope, false); net != nullptr)
+			zero_nets.insert(reinterpret_cast<sta::Net *>(net));
+		if (YNet *net = netlist_->constNet(scope, true); net != nullptr)
+			one_nets.insert(reinterpret_cast<sta::Net *>(net));
+	}
+	return new sta::NetworkConstantPinIterator(this, zero_nets, one_nets);
 }
 
 void YosysNetwork::visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const

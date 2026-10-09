@@ -1,0 +1,8 @@
+# Constants through the Verilog handoff: OpenSTA's write_verilog output, read
+# back by OpenSTA's reader (const_handoff.tcl), must keep the constant.
+read_liberty -lib -ignore_miss_func deps/OpenSTA/test/nangate45/Nangate45_typ.lib
+read_verilog test/const.v
+hierarchy -top top
+opensta_net -liberty deps/OpenSTA/test/nangate45/Nangate45_typ.lib -link
+opensta_net -source test/const_body.tcl
+opensta_net -eval "write_verilog test/const_out.v"

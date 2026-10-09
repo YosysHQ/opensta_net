@@ -112,6 +112,11 @@ public:
 	sta::Instance *instance(const sta::Net *net) const override;
 	sta::NetPinIterator *pinIterator(const sta::Net *net) const override;
 	sta::NetTermIterator *termIterator(const sta::Net *net) const override;
+
+	// Constant nets
+	bool isPower(const sta::Net *net) const override;
+	bool isGround(const sta::Net *net) const override;
+	sta::ConstantPinIterator *constantPinIterator() override;
 protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
@@ -129,6 +134,7 @@ private:
 	Netlist *netlist_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
+	std::vector<YInstance *> scopes_; // top and hierarchical instances
 
 	// Cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;

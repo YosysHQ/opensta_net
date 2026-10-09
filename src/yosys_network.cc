@@ -136,6 +136,19 @@ void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
 	}
 }
 
+// port[bit]
+std::string detail::pinKey(const Netlist &netlist, const Netlist::Pin *pin)
+{
+	return netlist.shape(pin).name + "[" + std::to_string(netlist.hdlIndex(pin)) + "]";
+}
+
+std::string detail::netKey(const Netlist &netlist, const Netlist::Net *net)
+{
+	if (net == nullptr)
+		return "-";
+	return detail::staNetName(netlist, net);
+}
+
 bool detail::NameClaim::operator<(const NameClaim &other) const
 {
 	return std::tie(alias, wire, index) < std::tie(other.alias, other.wire, other.index);
@@ -230,7 +243,10 @@ void YosysNetwork::link()
 	top_cell_ = makeShapedCell(top->master, false, *top->ports);
 	inst_cells_[top->id] = top_cell_;
 	indexPins(top);
+	countMasters(top);
 	buildTables(top);
+	master_uses_.clear();
+	scope_cells_.clear();
 	if (pin_ports_.data.size() >= 0x40000000)
 		report_->error(2927, "link: too many pins for 30-bit object ids.");
 }
@@ -250,6 +266,8 @@ void YosysNetwork::unlink()
 	child_names_.clear();
 	net_names_.clear();
 	pin_names_.clear();
+	master_uses_.clear();
+	scope_cells_.clear();
 	scopes_.clear();
 	clearNetDrvrPinMap();
 }
@@ -278,12 +296,76 @@ void YosysNetwork::buildTables(YInstance *scope)
 	for (YInstance *child : scope->children) {
 		if (!child->leaf) {
 			buildTables(child);
-			inst_cells_[child->id] = makeShapedCell(child->type, false, *child->ports);
+			inst_cells_[child->id] = scopeCell(child);
 		}
 		indexPins(child);
 	}
 	detail::scopeNetNames(*netlist_, scope, net_names_[scope->id]);
 	scopes_.push_back(scope);
+}
+
+sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope)
+{
+	std::string key = scope->master;
+	if (master_uses_[scope->master] > 1)
+		key += "\n" + scopeBody(scope);
+	auto [it, fresh] = scope_cells_.try_emplace(key, nullptr);
+	if (fresh)
+		it->second = makeShapedCell(freeCellName(scope), false, *scope->ports);
+	return it->second;
+}
+
+std::string YosysNetwork::scopeBody(const YInstance *scope) const
+{
+	std::vector<std::string> lines;
+	for (const Netlist::PortShape &shape : *scope->ports)
+		lines.push_back(std::format("P {} {} {} {} {}", shape.name, shape.width, shape.from, shape.to, int(shape.dir)));
+	for (const YPin *pin : scope->pins) {
+		const YNet *inner = nullptr;
+		if (pin->term != nullptr)
+			inner = pin->term->net;
+		lines.push_back("T " + detail::pinKey(*netlist_, pin) + " " + detail::netKey(*netlist_, inner));
+	}
+	for (const YNet *net : netlist_->nets(scope))
+		lines.push_back("N " + detail::staNetName(*netlist_, net));
+	for (const YInstance *child : scope->children)
+		childLines(child, lines);
+	std::sort(lines.begin(), lines.end());
+	std::string body;
+	for (const std::string &line : lines)
+		body += line + "\n";
+	return body;
+}
+
+// Name, cell, and the net on each pin
+void YosysNetwork::childLines(const YInstance *child, std::vector<std::string> &lines) const
+{
+	std::string child_name = detail::staInstName(child);
+	lines.push_back("C " + child_name + " " + name(reinterpret_cast<sta::Cell *>(inst_cells_.get(child->id))));
+	for (const YPin *pin : child->pins) {
+		std::string net = detail::netKey(*netlist_, pin->net);
+		lines.push_back("c " + child_name + " " + detail::pinKey(*netlist_, pin) + " " + net);
+	}
+}
+
+std::string YosysNetwork::freeCellName(const YInstance *scope) const
+{
+	if (findCell(design_lib_, scope->master) == nullptr)
+		return scope->master;
+	std::string name = scope->type;
+	for (int n = 1; findCell(design_lib_, name) != nullptr; n++)
+		name = scope->type + "_" + std::to_string(n);
+	return name;
+}
+
+void YosysNetwork::countMasters(const YInstance *scope)
+{
+	for (const YInstance *child : scope->children) {
+		if (!child->leaf) {
+			master_uses_[child->master]++;
+			countMasters(child);
+		}
+	}
 }
 
 sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const

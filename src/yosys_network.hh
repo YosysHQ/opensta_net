@@ -32,6 +32,10 @@ Netlist::Dir netlistDir(const sta::PortDirection *dir);
 // Order of ConcreteNetwork
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
+// Scope body keys
+std::string pinKey(const Netlist &netlist, const Netlist::Pin *pin);
+std::string netKey(const Netlist &netlist, const Netlist::Net *net);
+
 // Claim of an STA net name by the source bit that gives it. Canonical names
 // beat aliases, then the smallest bit wins
 struct NameClaim {
@@ -131,6 +135,11 @@ private:
 	void indexPorts(sta::ConcreteCell *ccell);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
+	sta::ConcreteCell *scopeCell(const YInstance *scope);
+	std::string scopeBody(const YInstance *scope) const;
+	void childLines(const YInstance *child, std::vector<std::string> &lines) const;
+	std::string freeCellName(const YInstance *scope) const;
+	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
 	static const YInstance *asInst(const sta::Instance *inst);
 	static const YPin *asPin(const sta::Pin *pin);
@@ -153,6 +162,10 @@ private:
 	Yosys::IdMap<detail::ChildNames> child_names_;
 	Yosys::IdMap<detail::NetNames> net_names_;
 	Yosys::IdMap<detail::PinNames> pin_names_; // "D", "A[3]"
+
+	// Link time: hierarchical instances per master, scope cells by master and body
+	std::map<std::string, int, std::less<>> master_uses_;
+	std::map<std::string, sta::ConcreteCell *, std::less<>> scope_cells_;
 };
 
 } // namespace ysta

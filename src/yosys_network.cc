@@ -688,4 +688,24 @@ void YosysNetwork::visitConnectedPins(const sta::Net *net, sta::PinVisitor &visi
 	sta::Network::visitConnectedPins(net, visitor, visited_nets);
 }
 
+void YosysNetwork::refuseEdit(const char *what) const
+{
+	report_->error(2929, "{}: network edits are not supported, edit the design in yosys.", what);
+}
+
+void YosysNetwork::setAttribute(sta::Instance *, std::string_view, std::string_view)
+{
+	refuseEdit("set_attribute");
+}
+
+void YosysNetwork::readNetlistBefore()
+{
+	refuseEdit("read_verilog");
+}
+
+void YosysNetwork::clear()
+{
+	refuseEdit("clear_network");
+}
+
 } // namespace ysta

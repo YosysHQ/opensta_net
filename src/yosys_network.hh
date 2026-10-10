@@ -128,6 +128,11 @@ public:
 	bool isPower(const sta::Net *net) const override;
 	bool isGround(const sta::Net *net) const override;
 	sta::ConstantPinIterator *constantPinIterator() override;
+
+	void setAttribute(sta::Instance *instance, std::string_view key, std::string_view value) override;
+	void readNetlistBefore() override;
+	void clear() override;
+	void refuseEdit(const char *what) const;
 protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:

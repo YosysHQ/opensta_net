@@ -33,6 +33,15 @@ struct YosysSta : public sta::Sta {
 public:
 	void makeReport() override;
 	void makeNetwork() override;
+	sta::Instance *makeInstance(const char *name, sta::LibertyCell *cell, sta::Instance *parent) override;
+	void deleteInstance(sta::Instance *inst) override;
+	void replaceCell(sta::Instance *inst, sta::Cell *to_cell, sta::LibertyCell *to_lib_cell) override;
+	sta::Net *makeNet(const char *name, sta::Instance *parent) override;
+	void deleteNet(sta::Net *net) override;
+	void connectPin(sta::Instance *inst, sta::Port *port, sta::Net *net) override;
+	void connectPin(sta::Instance *inst, sta::LibertyPort *port, sta::Net *net) override;
+	void disconnectPin(sta::Pin *pin) override;
+	void makePortPin(const char *port_name, sta::PortDirection *dir) override;
 };
 
 struct Options {

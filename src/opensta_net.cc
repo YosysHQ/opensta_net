@@ -46,6 +46,53 @@ void YosysSta::makeNetwork()
 	network_ = yosys_network;
 }
 
+sta::Instance *YosysSta::makeInstance(const char *, sta::LibertyCell *, sta::Instance *)
+{
+	yosys_network->refuseEdit("make_instance");
+	return nullptr;
+}
+
+void YosysSta::deleteInstance(sta::Instance *)
+{
+	yosys_network->refuseEdit("delete_instance");
+}
+
+void YosysSta::replaceCell(sta::Instance *, sta::Cell *, sta::LibertyCell *)
+{
+	yosys_network->refuseEdit("replace_cell");
+}
+
+sta::Net *YosysSta::makeNet(const char *, sta::Instance *)
+{
+	yosys_network->refuseEdit("make_net");
+	return nullptr;
+}
+
+void YosysSta::deleteNet(sta::Net *)
+{
+	yosys_network->refuseEdit("delete_net");
+}
+
+void YosysSta::connectPin(sta::Instance *, sta::Port *, sta::Net *)
+{
+	yosys_network->refuseEdit("connect_pin");
+}
+
+void YosysSta::connectPin(sta::Instance *, sta::LibertyPort *, sta::Net *)
+{
+	yosys_network->refuseEdit("connect_pin");
+}
+
+void YosysSta::disconnectPin(sta::Pin *)
+{
+	yosys_network->refuseEdit("disconnect_pin");
+}
+
+void YosysSta::makePortPin(const char *, sta::PortDirection *)
+{
+	yosys_network->refuseEdit("make_port_pin");
+}
+
 bool tclEval(const std::string &script)
 {
 	return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK;
@@ -221,7 +268,8 @@ void OpenstaNetPass::help()
 	log("    opensta_net [options]\n");
 	log("\n");
 	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter over a netlist\n");
-	log("view of the design.\n");
+	log("view of the design. OpenSTA network edits (replace_cell, connect_pin, ...)\n");
+	log("are refused, edit the design in yosys.\n");
 	log("\n");
 	log("    -liberty <file>\n");
 	log("        read a liberty file into OpenSTA.\n");

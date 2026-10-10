@@ -98,6 +98,9 @@ expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
 expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
 expect eval_quotes test/eval_quotes.ys '^42$'
 expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'
+for t in attr_refused read_verilog_refused clear_network_refused; do
+	expect $t test/$t.tcl '^CAUGHT Error: 2929' '^SLACK 8.60$'
+done
 
 echo "---"
 echo "pass=$pass fail=$fail"

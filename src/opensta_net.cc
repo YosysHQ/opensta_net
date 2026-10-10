@@ -413,7 +413,8 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 {
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
-	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync}, {"-autosync", &opt.autosync}};
+	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync},
+	                                             {"-autosync", &opt.autosync}, {"-keep_hierarchy", &opt.keep_hierarchy}};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -442,6 +443,36 @@ void linkOrSync(Design *design, const Options &opt)
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
 	syncView(design);
+}
+
+void sourceSdc(Design *design, const Options &opt)
+{
+	ysta::YosysNetwork *network = the_sta->yosys_network;
+	if (!opt.keep_hierarchy) {
+		checkSourced(sourceFile(opt.sdc_file, true), opt.sdc_file);
+		return;
+	}
+	network->beginRecording();
+	bool ok = sourceFile(opt.sdc_file, true);
+	std::set<Netlist::Instance *> scopes = network->endRecording();
+	checkSourced(ok, opt.sdc_file);
+	the_sta->view.invalidateCheck();
+	if (!the_sta->view.valid()) {
+		log_warning("opensta_net: design changed while the constraints were read, nothing marked.\n");
+		syncView(design);
+		return;
+	}
+	markKeepHierarchy(scopes);
+}
+
+void markKeepHierarchy(const std::set<Netlist::Instance *> &scopes)
+{
+	for (Netlist::Instance *scope : scopes) {
+		RTLIL::Module *module = the_sta->view.module(scope);
+		module->set_bool_attribute(ID::keep_hierarchy);
+		log("opensta_net: keep_hierarchy on %s\n", log_id(module));
+	}
+	log("opensta_net: marked %zu modules keep_hierarchy.\n", scopes.size());
 }
 
 void readLiberty(const std::string &file)
@@ -523,6 +554,10 @@ void OpenstaNetPass::help()
 	log("    -sdc <file>\n");
 	log("        source an SDC file in the shared interpreter.\n");
 	log("\n");
+	log("    -keep_hierarchy\n");
+	log("        with -sdc: mark modules referenced by the constraints (and their\n");
+	log("        ancestors) with the keep_hierarchy attribute.\n");
+	log("\n");
 	log("    -source <file>\n");
 	log("        source a Tcl file in the shared interpreter.\n");
 	log("\n");
@@ -545,7 +580,7 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 		readLiberty(opt.liberty_file);
 	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
-		checkSourced(sourceFile(opt.sdc_file, true), opt.sdc_file);
+		sourceSdc(design, opt);
 	if (!opt.source_file.empty())
 		checkSourced(sourceFile(opt.source_file, false), opt.source_file);
 	if (!opt.eval_cmd.empty())

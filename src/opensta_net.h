@@ -61,7 +61,7 @@ public:
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false, sync = false, autosync = false;
+	bool link = false, sync = false, autosync = false, keep_hierarchy = false;
 };
 
 // Tcl
@@ -102,6 +102,8 @@ void bootSta();
 // opensta_net
 size_t parseOptions(const std::vector<std::string> &args, Options &opt);
 void linkOrSync(Design *design, const Options &opt);
+void sourceSdc(Design *design, const Options &opt);
+void markKeepHierarchy(const std::set<Yosys::Netlist::Instance *> &scopes);
 void readLiberty(const std::string &file);
 bool sourceFile(const std::string &file, bool sdc);
 void checkSourced(bool ok, const std::string &file);

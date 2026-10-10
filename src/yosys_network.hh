@@ -76,6 +76,7 @@ public:
 	void link();
 	void unlink();
 	bool linked() const;
+	std::vector<std::string> takeStubTypes();
 
 	bool ports(const YInstance &inst, std::vector<Netlist::PortShape> &out) override;
 
@@ -131,6 +132,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
+	sta::ConcreteCell *makeStubCell(const YInstance &inst);
 	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::PortShape> &shapes);
 	void indexPorts(sta::ConcreteCell *ccell);
 	sta::ConcretePort *portOf(const YPin *pin) const;
@@ -149,6 +151,7 @@ private:
 	Netlist *netlist_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
+	std::vector<std::string> stub_types_;
 	std::vector<YInstance *> scopes_; // top and hierarchical instances
 
 	// Cells and ports

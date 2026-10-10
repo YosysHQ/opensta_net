@@ -71,6 +71,13 @@ void logCounts(long ms)
 	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
 }
 
+void warnStubTypes()
+{
+	for (const std::string &type : the_sta->yosys_network->takeStubTypes())
+		log_warning("opensta_net: no liberty cell for type %s, made a stub cell. Its instances contribute no "
+		            "timing arcs.\n", type.c_str());
+}
+
 void dropView()
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
@@ -96,6 +103,7 @@ bool linkView(Design *design, std::string &error)
 		error = exception.what();
 		return false;
 	}
+	warnStubTypes();
 	auto elapsed = std::chrono::steady_clock::now() - t0;
 	logCounts(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 	return true;

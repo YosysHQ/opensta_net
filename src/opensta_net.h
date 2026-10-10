@@ -46,6 +46,7 @@ bool tclEval(const std::string &script);
 // Build
 void countScope(const Yosys::Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins);
 void logCounts(long ms);
+void warnStubTypes();
 void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);

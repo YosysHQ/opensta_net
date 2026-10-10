@@ -224,6 +224,11 @@ bool YosysNetwork::linked() const
 	return top_cell_ != nullptr;
 }
 
+std::vector<std::string> YosysNetwork::takeStubTypes()
+{
+	return std::move(stub_types_);
+}
+
 bool YosysNetwork::isLinked() const
 {
 	return linked() && netlist_->valid();
@@ -253,7 +258,7 @@ void YosysNetwork::link()
 
 void YosysNetwork::unlink()
 {
-	// Scope cells die with the library
+	// Stub and scope cells die with the library
 	if (design_lib_ != nullptr)
 		deleteLibrary(design_lib_);
 	design_lib_ = nullptr;
@@ -278,6 +283,7 @@ bool YosysNetwork::ports(const YInstance &inst, std::vector<Netlist::PortShape> 
 	while (port_iter->hasNext()) {
 		sta::Port *port = port_iter->next();
 		Netlist::PortShape &shape = out.emplace_back();
+		// Stub port names are escaped, liberty names are raw
 		shape.name = detail::staUnescape(name(port));
 		shape.width = size(port);
 		if (hasMembers(port)) {
@@ -402,12 +408,27 @@ sta::ConcreteCell *YosysNetwork::typeCell(const YInstance &inst)
 	if (it != type_cells_.end())
 		return it->second;
 	sta::LibertyCell *lcell = findLibertyCell(inst.type.c_str());
-	if (lcell == nullptr)
-		report_->error(2923, "cell type {} has no liberty cell.", inst.type);
-	sta::ConcreteCell *ccell = reinterpret_cast<sta::ConcreteCell *>(cell(lcell));
-	indexPorts(ccell);
+	sta::ConcreteCell *ccell;
+	if (lcell != nullptr) {
+		ccell = reinterpret_cast<sta::ConcreteCell *>(cell(lcell));
+		indexPorts(ccell);
+	} else {
+		ccell = makeStubCell(inst);
+	}
 	type_cells_[inst.type] = ccell;
 	return ccell;
+}
+
+sta::ConcreteCell *YosysNetwork::makeStubCell(const YInstance &inst)
+{
+	if (inst.internal)
+		report_->error(2923, "internal cell type {} has no liberty cell, map the design first "
+		                     "(techmap/dfflibmap/abc, or icell_liberty).", inst.type);
+	// A blackbox module's ports, when known
+	std::vector<Netlist::PortShape> shapes;
+	netlist_->hostPorts(&inst, shapes);
+	stub_types_.push_back(inst.type);
+	return makeShapedCell(inst.type, true, shapes);
 }
 
 sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bool leaf, const std::vector<Netlist::PortShape> &shapes)

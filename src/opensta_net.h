@@ -39,6 +39,7 @@ struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	Yosys::NetView view;
 	Yosys::pool<std::string> liberty_files_read;
+	bool autosync = false;
 	bool syncing = false;
 	// Constraints of a sync whose rebuild failed
 	std::optional<std::vector<ModeSdc>> held;
@@ -58,7 +59,7 @@ public:
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false, sync = false;
+	bool link = false, sync = false, autosync = false;
 };
 
 // Tcl
@@ -85,9 +86,14 @@ bool needsSync();
 void rebuild(Design *design);
 void syncView(Design *design);
 
+// Tcl traces
+int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
+
 // Boot
 void makeSta();
 void wrapClockSense();
+void traceLeave(const char *command, const char *handler);
+void addTraces();
 void bootSta();
 
 // opensta_net

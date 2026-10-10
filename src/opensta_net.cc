@@ -335,6 +335,14 @@ void syncView(Design *design)
 	the_sta->syncing = false;
 }
 
+int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
+{
+	the_sta->view.invalidateCheck();
+	if (the_sta->autosync && yosys_design != nullptr)
+		syncView(yosys_design);
+	return TCL_OK;
+}
+
 void makeSta()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
@@ -360,12 +368,27 @@ void wrapClockSense()
 		log_error("OpenSTA: cannot wrap set_clock_sense_cmd: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
+void traceLeave(const char *command, const char *handler)
+{
+	if (!tclEval(std::string("trace add execution ") + command + " leave " + handler))
+		log_error("OpenSTA: cannot trace %s: %s\n", command, Tcl_GetStringResult(yosys_get_tcl_interp()));
+}
+
+void addTraces()
+{
+	Tcl_Interp *interp = yosys_get_tcl_interp();
+	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
+	for (const char *editor : {"yosys", "rtlil::set_attr", "rtlil::set_param"})
+		traceLeave(editor, "ysta::after_yosys");
+}
+
 void bootSta()
 {
 	if (the_sta != nullptr)
 		return;
 	makeSta();
 	wrapClockSense();
+	addTraces();
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 
@@ -373,7 +396,7 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 {
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
-	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync}};
+	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync}, {"-autosync", &opt.autosync}};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -476,6 +499,10 @@ void OpenstaNetPass::help()
 	log("        if the design changed since the view was built, rebuild it and\n");
 	log("        re-apply the current constraints. Every call does this implicitly.\n");
 	log("\n");
+	log("    -autosync\n");
+	log("        also sync after every `yosys`, `rtlil::set_attr` or `rtlil::set_param`\n");
+	log("        command run from Tcl.\n");
+	log("\n");
 	log("    -sdc <file>\n");
 	log("        source an SDC file in the shared interpreter.\n");
 	log("\n");
@@ -495,6 +522,8 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	extra_args(args, argidx, design);
 
 	bootSta();
+	if (opt.autosync)
+		the_sta->autosync = true;
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
 	linkOrSync(design, opt);

@@ -1,0 +1,6 @@
+read_liberty -lib test/simple.lib
+read_verilog test/sync.v
+hierarchy -top top
+opensta_net -liberty test/simple.lib -link -autosync
+opensta_net -sdc test/sync_ports.sdc
+opensta_net -source test/sync_tcl.tcl

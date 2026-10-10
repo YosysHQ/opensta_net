@@ -76,6 +76,10 @@ expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
 lines m4 test/m4.ys 'slack [a-z_ ]*: [0-9.]+' 'slack baseline: 8.60|slack after yosys edit: 8.70'
 # Post-opt numbers of the synced run equal a fresh run
 same optflow "$(run test/optflow.ys | grep -E '^(insts|slack):' | tail -n 2)" "$(run test/optflow_fresh.ys | grep -E '^(insts|slack):')"
+# A Monitor-silent edit through the `yosys` Tcl command makes OpenSTA refuse
+expect memo test/memo.ys 'linked before: 1' 'linked after: 0' 'refused: .*No network has been linked'
+# rtlil::set_attr is noticed as a `yosys` command is, -autosync syncs it
+lines rtlil_attr test/rtlil_attr.tcl '^(NET|LINKED) .*' 'NET n1|LINKED 0|NET zz|LINKED 1|NET n1'
 # A new module and a new top both force a relink
 lines top test/top.ys '^insts: [0-9]+|design changed since link' 'insts: 2|design changed since link|insts: 3'
 # An assign-to-constant wire is an alias of the constant net
@@ -105,6 +109,8 @@ stress_out=$(run test/stress.ys | sed -n '/^--- ports ---$/,$p' | sed '/^End of 
 check stress cmp -s <(diff <(echo "$stress_ref") <(echo "$stress_out")) test/stress_waiver
 
 # Sync: constraints come back after optimization
+lines sync_tcl_autosync test/sync_tcl.ys '^(SLACK|CELLS) .*|synced after design change, [0-9]+' \
+	'SLACK 8.60|synced after design change, 0|synced after design change, 0|SLACK 8.60|CELLS 6'
 expect sync_rawtcl_checkpoint test/sync_rawtcl.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
 expect sync_unreported_first test/sync_unreported.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
 # Hierarchical constraints survive flatten: none lost, same objects and slack
@@ -114,10 +120,12 @@ check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
 
 # Robustness: each check failed before its fix
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
+expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
 expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'
 expect parasitics_warned test/parasitics.tcl 'drops the loaded parasitics'
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
 expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
+lines link_fail test/link_fail.tcl '^(SLACK|SYNC|AUTOSYNC) .*' 'SLACK 8.60|SYNC 0 0|SLACK 8.60|AUTOSYNC 0|SLACK 8.60'
 expect sdc_write_fail test/sdc_write_fail.tcl '^SYNC 0 0$' '^CLOCKS 1$'
 expect eval_quotes test/eval_quotes.ys '^42$'
 expect noop_clean test/noop_clean.ys 'built network' '!synced after design change'

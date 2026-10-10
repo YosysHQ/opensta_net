@@ -28,8 +28,10 @@ smoke: opensta_net.so
 .PHONY: test
 test: opensta_net.so
 	bash test/run.sh
+	bash conformance/run.sh
 
 .PHONY: clean
 clean:
 	rm -f opensta_net.so
+	rm -rf conformance/work
 	rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v

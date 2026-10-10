@@ -1,4 +1,5 @@
 *.so
+conformance/work/
 test/*_out.sdc
 test/*_out.v
 test/flat_[12].sdc

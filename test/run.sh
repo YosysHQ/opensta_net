@@ -117,6 +117,7 @@ expect sync_unreported_first test/sync_unreported.ys 'synced after design change
 lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after design change, [0-9]+' \
 	'SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET u1/y|synced after design change, 0|SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET y'
 check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
+expect stale_rawtcl_refuses test/stale_rawtcl.ys 'No network has been linked' '!^SLACK' '^EXIT 1$'
 
 # Robustness: each check failed before its fix
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'

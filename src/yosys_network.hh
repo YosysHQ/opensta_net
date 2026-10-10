@@ -83,6 +83,7 @@ public:
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
 	void setReadStale(bool on);
+	void setBeforeCheck(void (*hook)());
 
 	// Instance
 	sta::Instance *topInstance() const override;
@@ -158,6 +159,7 @@ private:
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
 	bool read_stale_ = false;
+	void (*before_check_)() = nullptr;
 	std::vector<std::string> stub_types_;
 	std::vector<YInstance *> scopes_; // top and hierarchical instances
 

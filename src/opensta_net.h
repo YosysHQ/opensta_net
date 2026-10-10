@@ -41,6 +41,8 @@ struct YosysSta : public sta::Sta {
 	Yosys::pool<std::string> liberty_files_read;
 	bool autosync = false;
 	bool syncing = false;
+	Yosys::Pass *seen_pass = nullptr;
+	int seen_calls = -1;
 	// Constraints of a sync whose rebuild failed
 	std::optional<std::vector<ModeSdc>> held;
 public:
@@ -88,6 +90,7 @@ void syncView(Design *design);
 
 // Tcl traces
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
+void notePassRun();
 
 // Boot
 void makeSta();

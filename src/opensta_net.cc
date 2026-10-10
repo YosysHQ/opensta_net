@@ -17,6 +17,10 @@ extern "C" {
 extern int Sta_Init(Tcl_Interp *interp);
 }
 
+YOSYS_NAMESPACE_BEGIN
+extern Pass *current_pass; // kernel/register.cc
+YOSYS_NAMESPACE_END
+
 USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
@@ -49,6 +53,7 @@ void YosysSta::makeReport()
 void YosysSta::makeNetwork()
 {
 	yosys_network = new ysta::YosysNetwork;
+	yosys_network->setBeforeCheck(notePassRun);
 	network_ = yosys_network;
 }
 
@@ -341,6 +346,18 @@ int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 	if (the_sta->autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
+}
+
+void notePassRun()
+{
+	int calls = -1;
+	if (current_pass != nullptr)
+		calls = current_pass->call_counter;
+	if (current_pass == the_sta->seen_pass && calls == the_sta->seen_calls)
+		return;
+	the_sta->seen_pass = current_pass;
+	the_sta->seen_calls = calls;
+	the_sta->view.invalidateCheck();
 }
 
 void makeSta()

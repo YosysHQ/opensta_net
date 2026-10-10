@@ -1,0 +1,6 @@
+create_clock -period 10 -name clk [get_ports clk]
+set_input_delay 1 -clock clk [get_ports in]
+set_output_delay 1 -clock clk [get_ports {out out2}]
+set_false_path -through [get_pins u_a/Y]
+set_multicycle_path 2 -setup -through [get_pins u_b/Y]
+set_max_delay 4 -through [get_nets n1b]

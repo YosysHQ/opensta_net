@@ -234,8 +234,14 @@ void YosysNetwork::setReadStale(bool on)
 	read_stale_ = on;
 }
 
+void YosysNetwork::setBeforeCheck(void (*hook)())
+{
+	before_check_ = hook;
+}
+
 bool YosysNetwork::isLinked() const
 {
+	before_check_();
 	return linked() && (read_stale_ || netlist_->valid());
 }
 

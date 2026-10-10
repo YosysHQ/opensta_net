@@ -1,0 +1,21 @@
+read_verilog deps/yosys/tests/functional/picorv32.v
+read_liberty -lib -ignore_miss_func deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+synth -top picorv32
+dfflibmap -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+abc -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+opt_clean -purge
+copy picorv32 picorv32_1
+copy picorv32 picorv32_2
+copy picorv32 picorv32_3
+copy picorv32 picorv32_4
+copy picorv32 picorv32_5
+copy picorv32 picorv32_6
+copy picorv32 picorv32_7
+copy picorv32 picorv32_8
+read_verilog bench/big.v
+hierarchy -top big
+stat -top big
+opensta_net -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib -link
+opensta_net -source bench/big.tcl
+opensta_net -link
+opensta_net -link

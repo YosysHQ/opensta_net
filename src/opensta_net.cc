@@ -1,5 +1,6 @@
 #include "opensta_net.h"
 
+#include <charconv>
 #include <fstream>
 
 #include "sta/Error.hh"
@@ -360,6 +361,47 @@ void notePassRun()
 	the_sta->view.invalidateCheck();
 }
 
+void *swigPointer(std::string_view handle, std::string_view type)
+{
+	const size_t digits = 2 * sizeof(void *);
+	if (handle.size() != 1 + digits + 3 + type.size() || handle[0] != '_' ||
+	    handle.substr(1 + digits, 3) != "_p_" || handle.substr(4 + digits) != type)
+		return nullptr;
+	unsigned char bytes[sizeof(void *)];
+	for (size_t i = 0; i < sizeof(void *); i++) {
+		const char *first = handle.data() + 1 + 2 * i;
+		std::from_chars_result parsed = std::from_chars(first, first + 2, bytes[i], 16);
+		if (parsed.ec != std::errc() || parsed.ptr != first + 2)
+			return nullptr;
+	}
+	void *pointer;
+	memcpy(&pointer, bytes, sizeof(pointer));
+	return pointer;
+}
+
+void recordHandle(std::string_view handle)
+{
+	ysta::YosysNetwork *network = the_sta->yosys_network;
+	if (void *inst = swigPointer(handle, "Instance"))
+		network->recordInstance(static_cast<const sta::Instance *>(inst));
+	else if (void *pin = swigPointer(handle, "Pin"))
+		network->recordPin(static_cast<const sta::Pin *>(pin));
+	else if (void *net = swigPointer(handle, "Net"))
+		network->recordNet(static_cast<const Netlist::Net *>(net));
+}
+
+int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+{
+	int code, count;
+	Tcl_Obj **items;
+	if (objc < 5 || !the_sta->yosys_network->recording() || Tcl_GetIntFromObj(interp, objv[2], &code) != TCL_OK ||
+	    code != TCL_OK || Tcl_ListObjGetElements(interp, objv[3], &count, &items) != TCL_OK)
+		return TCL_OK;
+	for (int i = 0; i < count; i++)
+		recordHandle(Tcl_GetString(items[i]));
+	return TCL_OK;
+}
+
 void makeSta()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
@@ -395,8 +437,11 @@ void addTraces()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
+	Tcl_CreateObjCommand(interp, "ysta::record_result", tclRecordResult, nullptr, nullptr);
 	for (const char *editor : {"yosys", "rtlil::set_attr", "rtlil::set_param"})
 		traceLeave(editor, "ysta::after_yosys");
+	for (const char *getter : {"get_cells", "get_pins", "get_nets", "get_fanin", "get_fanout", "all_registers"})
+		traceLeave(getter, "ysta::record_result");
 }
 
 void bootSta()

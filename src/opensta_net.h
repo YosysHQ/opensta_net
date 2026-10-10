@@ -91,6 +91,9 @@ void syncView(Design *design);
 // Tcl traces
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 void notePassRun();
+void *swigPointer(std::string_view handle, std::string_view type);
+void recordHandle(std::string_view handle);
+int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 
 // Boot
 void makeSta();

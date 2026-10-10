@@ -1,0 +1,12 @@
+# A constraint set from raw Tcl after the last opensta_net call must survive
+# the next sync: the sync writes the constraints as they are at that point.
+read_liberty -lib test/simple.lib
+read_verilog test/sync.v
+hierarchy -top top
+opensta_net -liberty test/simple.lib -link
+opensta_net -sdc test/sync_ports.sdc
+tcl test/sync_rawtcl.tcl
+opt_merge -share_all
+opt_clean -purge
+opensta_net -sync
+opensta_net -source test/sync_rawtcl_write.tcl

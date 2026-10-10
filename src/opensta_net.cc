@@ -1,8 +1,12 @@
 #include "opensta_net.h"
 
+#include <fstream>
 
 #include "sta/Error.hh"
 #include "sta/MinMax.hh"
+#include "sta/Mode.hh"
+#include "sta/Parasitics.hh"
+#include "sta/Scene.hh"
 #include "sta/StaMain.hh"
 
 namespace sta {
@@ -29,6 +33,8 @@ void NonConsoleTee::operator()(LogSink &sink) const
 size_t YosysStaReport::printString(const char *buffer, size_t length)
 {
 	std::string_view text(buffer, length);
+	if (text.starts_with("Warning"))
+		warnings++;
 	LogMessage msg(LogSeverity::Info, {}, "", "%s", text);
 	msg.cached_msg = std::string(text);
 	logger().for_each_sink(NonConsoleTee{msg});
@@ -98,6 +104,47 @@ bool tclEval(const std::string &script)
 	return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK;
 }
 
+// Line continuations and whitespace runs collapsed
+std::string normalizeCommand(const std::string &cmd)
+{
+	std::string out;
+	bool space = false;
+	for (size_t i = 0; i < cmd.size(); i++) {
+		if (cmd[i] == '\\' && i + 1 < cmd.size() && cmd[i + 1] == '\n') {
+			space = true;
+			i++;
+		} else if (isspace(static_cast<unsigned char>(cmd[i]))) {
+			space = true;
+		} else {
+			if (space && !out.empty())
+				out += ' ';
+			space = false;
+			out += cmd[i];
+		}
+	}
+	return out;
+}
+
+std::vector<std::string> sdcCommands(const std::string &text)
+{
+	std::vector<std::string> commands;
+	std::stringstream in(text);
+	std::string line, cmd;
+	while (std::getline(in, line)) {
+		cmd += line + "\n";
+		if ((!line.empty() && line.back() == '\\') || !Tcl_CommandComplete(cmd.c_str()))
+			continue;
+		std::string normal = normalizeCommand(cmd);
+		if (!normal.empty() && normal[0] != '#')
+			commands.push_back(cmd);
+		cmd.clear();
+	}
+	// Incomplete: its evaluation reports the error
+	if (!normalizeCommand(cmd).empty())
+		commands.push_back(cmd);
+	return commands;
+}
+
 void countScope(const Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins)
 {
 	nets += the_sta->view.nets(scope).size();
@@ -161,8 +208,131 @@ void linkDesign(Design *design)
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
+	the_sta->held.reset();
 	if (!linkView(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
+}
+
+bool writeModeSdc(const std::string &mode, std::string &text)
+{
+	std::string file = make_temp_file(get_base_tmpdir() + "/opensta_net_XXXXXX.sdc");
+	bool ok = tclEval("write_sdc -no_timestamp -mode {" + mode + "} {" + file + "}");
+	if (ok) {
+		std::stringstream stream;
+		stream << std::ifstream(file).rdbuf();
+		text = stream.str();
+	} else {
+		log_warning("opensta_net: write_sdc failed: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
+	}
+	remove(file.c_str());
+	return ok;
+}
+
+bool staleConstraints(std::vector<ModeSdc> &result)
+{
+	bool ok = true;
+	the_sta->yosys_network->setReadStale(true);
+	for (const sta::Mode *mode : the_sta->modes()) {
+		ModeSdc &sdc = result.emplace_back();
+		sdc.mode = mode->name();
+		ok = ok && writeModeSdc(sdc.mode, sdc.text);
+	}
+	the_sta->yosys_network->setReadStale(false);
+	return ok;
+}
+
+int applyCommands(const std::vector<std::string> &commands)
+{
+	Tcl_Interp *interp = yosys_get_tcl_interp();
+	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
+	int lost = 0;
+	for (const std::string &cmd : commands) {
+		int warnings = report->warnings;
+		bool failed = Tcl_EvalEx(interp, cmd.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK;
+		if (failed)
+			log_warning("opensta_net: sync: `%s` failed: %s\n", normalizeCommand(cmd).c_str(), Tcl_GetStringResult(interp));
+		lost += failed || report->warnings != warnings;
+	}
+	return lost;
+}
+
+int reapplyConstraints(const std::vector<ModeSdc> &before)
+{
+	std::string cmd_mode = the_sta->cmdMode()->name();
+	sta::Scene *cmd_scene = the_sta->cmdScene();
+	tclEval("set ::ysta::script [info script]; info script {}");
+	int lost = 0;
+	for (const ModeSdc &mode : before) {
+		the_sta->setCmdMode(mode.mode);
+		lost += applyCommands(sdcCommands(mode.text));
+	}
+	the_sta->setCmdMode(cmd_mode);
+	the_sta->setCmdScene(cmd_scene);
+	tclEval("info script $::ysta::script");
+	return lost;
+}
+
+void warnDroppedParasitics()
+{
+	for (const sta::Scene *scene : the_sta->scenes()) {
+		for (const sta::MinMax *min_max : sta::MinMax::range()) {
+			sta::Parasitics *parasitics = scene->parasitics(min_max);
+			if (parasitics != nullptr && parasitics->haveParasitics()) {
+				log_warning("opensta_net: the rebuild drops the loaded parasitics, read them again.\n");
+				return;
+			}
+		}
+	}
+}
+
+bool canBuild(Design *design)
+{
+	std::string reason;
+	if (NetView::buildable(design, reason))
+		return true;
+	log_warning("opensta_net: cannot rebuild the STA network: %s. It stays unlinked until a sync succeeds.\n",
+	            reason.c_str());
+	return false;
+}
+
+bool needsSync()
+{
+	if (the_sta->held)
+		return true;
+	return the_sta->yosys_network->linked() && !the_sta->view.valid();
+}
+
+void rebuild(Design *design)
+{
+	std::vector<ModeSdc> before;
+	if (the_sta->held) {
+		before = std::move(*the_sta->held);
+		the_sta->held.reset();
+	} else if (!staleConstraints(before)) {
+		log_warning("opensta_net: cannot write the constraints, the STA network stays stale.\n");
+		return;
+	} else {
+		warnDroppedParasitics();
+	}
+	std::string error;
+	if (!linkView(design, error)) {
+		the_sta->held = std::move(before);
+		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync succeeds.\n",
+		            error.c_str());
+		return;
+	}
+	int lost = reapplyConstraints(before);
+	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
+}
+
+void syncView(Design *design)
+{
+	the_sta->view.invalidateCheck();
+	if (the_sta->syncing || !needsSync() || !canBuild(design))
+		return;
+	the_sta->syncing = true;
+	rebuild(design);
+	the_sta->syncing = false;
 }
 
 void makeSta()
@@ -181,11 +351,21 @@ void makeSta()
 		log_error("OpenSTA: init_sta_cmds failed: %s\n", Tcl_GetStringResult(interp));
 }
 
+void wrapClockSense()
+{
+	std::string wrap = "rename ::sta::set_clock_sense_cmd ::sta::ysta_set_clock_sense_cmd; "
+	                   "proc ::sta::set_clock_sense_cmd {pins args} "
+	                   "{ if {[llength $pins]} { ::sta::ysta_set_clock_sense_cmd $pins {*}$args } }";
+	if (!tclEval(wrap))
+		log_error("OpenSTA: cannot wrap set_clock_sense_cmd: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
+}
+
 void bootSta()
 {
 	if (the_sta != nullptr)
 		return;
 	makeSta();
+	wrapClockSense();
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 
@@ -193,7 +373,7 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 {
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
-	const std::map<std::string, bool *> flags = {{"-link", &opt.link}};
+	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync}};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -208,6 +388,20 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 	}
 	opt.eval_cmd = unquote(opt.eval_cmd);
 	return argidx;
+}
+
+void linkOrSync(Design *design, const Options &opt)
+{
+	if (opt.link) {
+		linkDesign(design);
+		return;
+	}
+	// Passes may have run since the last call
+	the_sta->view.invalidateCheck();
+	if (!opt.sync && needsSync())
+		log_warning("opensta_net: design changed since link, rebuilding the STA network "
+		            "and re-applying the constraints.\n");
+	syncView(design);
 }
 
 void readLiberty(const std::string &file)
@@ -267,9 +461,9 @@ void OpenstaNetPass::help()
 	log("\n");
 	log("    opensta_net [options]\n");
 	log("\n");
-	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter over a netlist\n");
-	log("view of the design. OpenSTA network edits (replace_cell, connect_pin, ...)\n");
-	log("are refused, edit the design in yosys.\n");
+	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter and keep its\n");
+	log("netlist view in step with the design. OpenSTA network edits (replace_cell,\n");
+	log("connect_pin, ...) are refused, edit the design in yosys.\n");
 	log("\n");
 	log("    -liberty <file>\n");
 	log("        read a liberty file into OpenSTA.\n");
@@ -277,6 +471,10 @@ void OpenstaNetPass::help()
 	log("    -link\n");
 	log("        build the view from scratch (every module instantiated once: run\n");
 	log("        uniquify or flatten first). Constraints are cleared.\n");
+	log("\n");
+	log("    -sync\n");
+	log("        if the design changed since the view was built, rebuild it and\n");
+	log("        re-apply the current constraints. Every call does this implicitly.\n");
 	log("\n");
 	log("    -sdc <file>\n");
 	log("        source an SDC file in the shared interpreter.\n");
@@ -299,8 +497,7 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	bootSta();
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
-	if (opt.link)
-		linkDesign(design);
+	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
 		checkSourced(sourceFile(opt.sdc_file, true), opt.sdc_file);
 	if (!opt.source_file.empty())

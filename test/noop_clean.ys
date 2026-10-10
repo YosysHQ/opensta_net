@@ -1,0 +1,13 @@
+# opt_clean on a clean mapped design rewrites connections behind the
+# Monitor but changes no net: the view stays valid, no rebuild.
+read_verilog deps/yosys/tests/functional/picorv32.v
+read_liberty -lib -ignore_miss_func deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+synth -top picorv32
+dfflibmap -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+abc -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
+opt_clean -purge
+opensta_net -liberty deps/OpenSTA/test/sky130hd/sky130hd_tt.lib -link
+opt_clean
+opensta_net -sync
+opt_clean -purge
+opensta_net -sync

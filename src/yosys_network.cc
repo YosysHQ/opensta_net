@@ -229,9 +229,14 @@ std::vector<std::string> YosysNetwork::takeStubTypes()
 	return std::move(stub_types_);
 }
 
+void YosysNetwork::setReadStale(bool on)
+{
+	read_stale_ = on;
+}
+
 bool YosysNetwork::isLinked() const
 {
-	return linked() && netlist_->valid();
+	return linked() && (read_stale_ || netlist_->valid());
 }
 
 void YosysNetwork::attach(Netlist *netlist)

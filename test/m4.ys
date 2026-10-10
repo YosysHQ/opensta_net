@@ -1,0 +1,7 @@
+read_liberty -lib test/simple.lib
+read_verilog test/simple.v
+hierarchy -top top
+opensta_net -liberty test/simple.lib -link
+opensta_net -source test/m4a.tcl
+connect -port u_inv2 A q0
+opensta_net -source test/m4b.tcl

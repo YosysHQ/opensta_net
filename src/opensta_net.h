@@ -6,6 +6,8 @@
 
 #include <tcl.h>
 
+#include <optional>
+
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
 
@@ -23,13 +25,23 @@ struct NonConsoleTee {
 };
 
 struct YosysStaReport : public sta::ReportTcl {
+	int warnings = 0;
 	size_t printString(const char *buffer, size_t length) override;
+};
+
+// Constraints of one mode as SDC text
+struct ModeSdc {
+	std::string mode;
+	std::string text;
 };
 
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	Yosys::NetView view;
 	Yosys::pool<std::string> liberty_files_read;
+	bool syncing = false;
+	// Constraints of a sync whose rebuild failed
+	std::optional<std::vector<ModeSdc>> held;
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -46,11 +58,13 @@ public:
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false;
+	bool link = false, sync = false;
 };
 
 // Tcl
 bool tclEval(const std::string &script);
+std::string normalizeCommand(const std::string &cmd);
+std::vector<std::string> sdcCommands(const std::string &text);
 
 // Build
 void countScope(const Yosys::Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins);
@@ -60,12 +74,25 @@ void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);
 
+// Sync
+bool writeModeSdc(const std::string &mode, std::string &text);
+bool staleConstraints(std::vector<ModeSdc> &result);
+int applyCommands(const std::vector<std::string> &commands);
+int reapplyConstraints(const std::vector<ModeSdc> &before);
+void warnDroppedParasitics();
+bool canBuild(Design *design);
+bool needsSync();
+void rebuild(Design *design);
+void syncView(Design *design);
+
 // Boot
 void makeSta();
+void wrapClockSense();
 void bootSta();
 
 // opensta_net
 size_t parseOptions(const std::vector<std::string> &args, Options &opt);
+void linkOrSync(Design *design, const Options &opt);
 void readLiberty(const std::string &file);
 bool sourceFile(const std::string &file, bool sdc);
 void checkSourced(bool ok, const std::string &file);

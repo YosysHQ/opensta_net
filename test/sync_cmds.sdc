@@ -1,0 +1,6 @@
+create_clock -period 10 -name clk [get_ports clk]
+create_generated_clock -name g -source [get_ports clk] -divide_by 2 [get_pins u_e/Y]
+set_disable_timing -from A -to Y [get_cells u_e]
+set_input_delay 1 -clock clk [get_ports in]
+set_output_delay 1 -clock clk [get_ports out]
+set_max_delay 4 -through [get_nets n1b]

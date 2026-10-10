@@ -72,6 +72,12 @@ ref() {
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
 expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
+# A yosys-side rewire is synced before the next query
+lines m4 test/m4.ys 'slack [a-z_ ]*: [0-9.]+' 'slack baseline: 8.60|slack after yosys edit: 8.70'
+# Post-opt numbers of the synced run equal a fresh run
+same optflow "$(run test/optflow.ys | grep -E '^(insts|slack):' | tail -n 2)" "$(run test/optflow_fresh.ys | grep -E '^(insts|slack):')"
+# A new module and a new top both force a relink
+lines top test/top.ys '^insts: [0-9]+|design changed since link' 'insts: 2|design changed since link|insts: 3'
 # An assign-to-constant wire is an alias of the constant net
 expect tie test/tie.ys 'tie nets: 1'
 # Exact get_nets is one lookup: same nets as the wildcard scan, about as fast as get_cells
@@ -84,6 +90,11 @@ ref order ORDER test/order.ys test/order_ref.tcl
 # Constant nets are zero_/one_, so OpenSTA's write_verilog keeps them
 ref const CONST test/const.ys test/const_ref.tcl
 same const_handoff "$(sta test/const_ref.tcl | between CONST)" "$(sta test/const_handoff.tcl | between CONST)"
+# One written module per distinct body of uniquified copies
+uniq_got=$(run test/uniq.ys | between UNIQ)
+uniq_want=$(for v in same diff; do UNIQ_V=test/uniq_$v.v sta test/uniq_ref.tcl | between UNIQ; done)
+same uniq "$uniq_want" "$uniq_got"
+check uniq_modules [ "$(grep -c '^module' test/uniq_same.v)" = 2 -a "$(grep -c '^module' test/uniq_diff.v)" = 3 ]
 # Bused leaf-cell bit binding, descending and ascending liberty buses
 for t in bus bus_asc; do
 	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"
@@ -93,11 +104,25 @@ stress_ref=$(sta test/stress_ref.tcl | sed 's/line [0-9]*/line N/')
 stress_out=$(run test/stress.ys | sed -n '/^--- ports ---$/,$p' | sed '/^End of script/,$d' | sed 's/line [0-9]*/line N/')
 check stress cmp -s <(diff <(echo "$stress_ref") <(echo "$stress_out")) test/stress_waiver
 
+# Sync: constraints come back after optimization
+expect sync_rawtcl_checkpoint test/sync_rawtcl.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
+expect sync_unreported_first test/sync_unreported.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
+# Hierarchical constraints survive flatten: none lost, same objects and slack
+lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after design change, [0-9]+' \
+	'SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET u1/y|synced after design change, 0|SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET y'
+check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
+
 # Robustness: each check failed before its fix
+expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
+expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'
+expect parasitics_warned test/parasitics.tcl 'drops the loaded parasitics'
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
 expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
+expect sdc_write_fail test/sdc_write_fail.tcl '^SYNC 0 0$' '^CLOCKS 1$'
 expect eval_quotes test/eval_quotes.ys '^42$'
+expect noop_clean test/noop_clean.ys 'built network' '!synced after design change'
 expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'
+expect lost_rename test/lost_rename.tcl 'synced after design change, 0 constraint' '^LOAD w0$'
 for t in attr_refused read_verilog_refused clear_network_refused; do
 	expect $t test/$t.tcl '^CAUGHT Error: 2929' '^SLACK 8.60$'
 done

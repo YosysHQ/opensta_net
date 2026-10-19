@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Local checks. Each one fails on a regression, nothing relies on eyeballing
 set -u
 
 SPIKE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +13,7 @@ ok() { echo "PASS $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL $1${2:+ ($2)}"; fail=$((fail + 1)); }
 check() { if "${@:2}"; then ok "$1"; else bad "$1"; fi; }
 
-# Output of a .ys or .tcl script, then its exit code
+# output of a .ys or .tcl script, then its exit code
 run() {
 	local mode=-c
 	[[ $1 == *.ys ]] && mode=-s
@@ -22,17 +21,15 @@ run() {
 	echo "EXIT $?"
 }
 
-# Output of the reference OpenSTA binary
+# output of the reference OpenSTA binary
 sta() { "$STA" -no_init -no_splash -exit "$1" 2>&1; }
 
-# Lines between <tag>_BEGIN and <tag>_END, without the plugin's own log lines
+# lines between <tag>_BEGIN and <tag>_END
 between() { awk -v b="$1_BEGIN" -v e="$1_END" '$0 == b {f=1; next} $0 == e {f=0} f' | grep -v '^opensta_net:'; }
 
-# Equal and not empty
+# equal and not empty
 same() { check "$1" [ -n "$2" -a "$2" = "$3" ]; }
 
-# Every regex matches the script output. !re must not match, @file=re must match
-# the file (removed before the run). EXIT 0 is required unless a check names EXIT
 expect() {
 	local name=$1 script=$2 re file log
 	shift 2
@@ -51,7 +48,6 @@ expect() {
 	ok "$name"
 }
 
-# The parts of the script output that match re, joined by |, are exactly want
 lines() {
 	local log got
 	log=$(run "$2")
@@ -59,8 +55,6 @@ lines() {
 	check "$1" [ "$got" = "$4" -a "$(tail -n 1 <<< "$log")" = "EXIT 0" ]
 }
 
-# The <tag> section of the script output equals the reference binary's, which
-# reads what the script wrote and must match re
 ref() {
 	local got want
 	got=$(run "$3" | between "$2")
@@ -71,61 +65,46 @@ ref() {
 
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
-# keep_hierarchy marking, asserted by select inside the scripts
+# keep_hierarchy marking
 expect kh test/kh.ys
 expect kh2 test/kh2.ys
 check kh_write_sdc_golden cmp -s test/kh_out.sdc test/kh_out.golden
 
 expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
-# A yosys-side rewire is synced before the next query
 lines m4 test/m4.ys 'slack [a-z_ ]*: [0-9.]+' 'slack baseline: 8.60|slack after yosys edit: 8.70'
-# Post-opt numbers of the synced run equal a fresh run
 same optflow "$(run test/optflow.ys | grep -E '^(insts|slack):' | tail -n 2)" "$(run test/optflow_fresh.ys | grep -E '^(insts|slack):')"
-# A Monitor-silent edit through the `yosys` Tcl command makes OpenSTA refuse
 expect memo test/memo.ys 'linked before: 1' 'linked after: 0' 'refused: .*No network has been linked'
-# rtlil::set_attr is noticed as a `yosys` command is, -autosync syncs it
 lines rtlil_attr test/rtlil_attr.tcl '^(NET|LINKED) .*' 'NET n1|LINKED 0|NET zz|LINKED 1|NET n1'
-# A new module and a new top both force a relink
 lines top test/top.ys '^insts: [0-9]+|design changed since link' 'insts: 2|design changed since link|insts: 3'
-# An assign-to-constant wire is an alias of the constant net
 expect tie test/tie.ys 'tie nets: 1'
-# Exact get_nets is one lookup: same nets as the wildcard scan, about as fast as get_cells
 expect nets_exact test/nets_exact.tcl '^EQUAL 1$' '^FAST 1$'
-
-# Same timing, names and order as the reference binary on the same netlist
 ref handoff HANDOFF test/handoff.ys test/handoff_ref.tcl slack
 ref barrier BARRIER test/barrier.ys test/barrier_ref.tcl 'slack \(MET\)'
 ref order ORDER test/order.ys test/order_ref.tcl
-# Constant nets are zero_/one_, so OpenSTA's write_verilog keeps them
 ref const CONST test/const.ys test/const_ref.tcl
 same const_handoff "$(sta test/const_ref.tcl | between CONST)" "$(sta test/const_handoff.tcl | between CONST)"
-# One written module per distinct body of uniquified copies
 uniq_got=$(run test/uniq.ys | between UNIQ)
 uniq_want=$(for v in same diff; do UNIQ_V=test/uniq_$v.v sta test/uniq_ref.tcl | between UNIQ; done)
 same uniq "$uniq_want" "$uniq_got"
 check uniq_modules [ "$(grep -c '^module' test/uniq_same.v)" = 2 -a "$(grep -c '^module' test/uniq_diff.v)" = 3 ]
 same uniq_fold "$(UNIQ_V=test/uniq.v sta test/uniq_ref.tcl | between UNIQ)" "$(run test/uniq_fold.ys | between UNIQ)"
-# Bused leaf-cell bit binding, descending and ascending liberty buses
 for t in bus bus_asc; do
 	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"
 done
-# The diff to the reference is exactly the documented alias-collapse deviation
 stress_ref=$(sta test/stress_ref.tcl | sed 's/line [0-9]*/line N/')
 stress_out=$(run test/stress.ys | sed -n '/^--- ports ---$/,$p' | sed '/^End of script/,$d' | sed 's/line [0-9]*/line N/')
 check stress cmp -s <(diff <(echo "$stress_ref") <(echo "$stress_out")) test/stress_waiver
 
-# Sync: constraints come back after optimization
+# sync
 lines sync_tcl_autosync test/sync_tcl.ys '^(SLACK|CELLS) .*|synced after design change, [0-9]+' \
 	'SLACK 8.60|synced after design change, 0|synced after design change, 0|SLACK 8.60|CELLS 6'
 expect sync_rawtcl_checkpoint test/sync_rawtcl.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
 expect sync_unreported_first test/sync_unreported.ys 'synced after design change, 0 ' '@test/sync_rawtcl_out.sdc=^set_output_delay 2.*\{out3\}'
-# Hierarchical constraints survive flatten: none lost, same objects and slack
+# hierarchical constraints survive flatten
 lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after design change, [0-9]+' \
 	'SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET u1/y|synced after design change, 0|SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET y'
 check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
 expect stale_rawtcl_refuses test/stale_rawtcl.ys 'No network has been linked' '!^SLACK' '^EXIT 1$'
-
-# Robustness: each check failed before its fix
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
 expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
 expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'

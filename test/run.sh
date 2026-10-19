@@ -104,6 +104,7 @@ uniq_got=$(run test/uniq.ys | between UNIQ)
 uniq_want=$(for v in same diff; do UNIQ_V=test/uniq_$v.v sta test/uniq_ref.tcl | between UNIQ; done)
 same uniq "$uniq_want" "$uniq_got"
 check uniq_modules [ "$(grep -c '^module' test/uniq_same.v)" = 2 -a "$(grep -c '^module' test/uniq_diff.v)" = 3 ]
+same uniq_fold "$(UNIQ_V=test/uniq.v sta test/uniq_ref.tcl | between UNIQ)" "$(run test/uniq_fold.ys | between UNIQ)"
 # Bused leaf-cell bit binding, descending and ascending liberty buses
 for t in bus bus_asc; do
 	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"

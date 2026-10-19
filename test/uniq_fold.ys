@@ -1,0 +1,6 @@
+# a module used twice links without uniquify
+read_liberty -lib -ignore_miss_func deps/OpenSTA/test/nangate45/Nangate45_typ.lib
+read_verilog test/uniq.v
+hierarchy -top top
+opensta_net -liberty deps/OpenSTA/test/nangate45/Nangate45_typ.lib -link
+opensta_net -source test/uniq_body.tcl

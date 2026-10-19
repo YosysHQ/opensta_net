@@ -512,12 +512,14 @@ void sourceSdc(Design *design, const Options &opt)
 
 void markKeepHierarchy(const std::set<Netlist::Instance *> &scopes)
 {
-	for (Netlist::Instance *scope : scopes) {
-		RTLIL::Module *module = the_sta->view.module(scope);
+	pool<RTLIL::Module *> modules;
+	for (Netlist::Instance *scope : scopes)
+		modules.insert(the_sta->view.module(scope));
+	for (RTLIL::Module *module : modules) {
 		module->set_bool_attribute(ID::keep_hierarchy);
 		log("opensta_net: keep_hierarchy on %s\n", module);
 	}
-	log("opensta_net: marked %zu modules keep_hierarchy.\n", scopes.size());
+	log("opensta_net: marked %zu modules keep_hierarchy.\n", modules.size());
 }
 
 void readLiberty(const std::string &file)
@@ -585,8 +587,8 @@ void OpenstaNetPass::help()
 	log("        read a liberty file into OpenSTA.\n");
 	log("\n");
 	log("    -link\n");
-	log("        build the view from scratch (every module instantiated once: run\n");
-	log("        uniquify or flatten first). Constraints are cleared.\n");
+	log("        build the view from scratch. A module used more than once gets one\n");
+	log("        set of objects per use. Constraints are cleared.\n");
 	log("\n");
 	log("    -sync\n");
 	log("        if the design changed since the view was built, rebuild it and\n");

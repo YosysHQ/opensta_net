@@ -91,7 +91,7 @@ std::string detail::staWireName(const Netlist::NetName &name)
 	return base + "[" + std::to_string(name.index) + "]";
 }
 
-std::string detail::staNetName(const Netlist &netlist, const Netlist::Net *net)
+std::string detail::staNetName(const Yosys::NetView &netlist, const Netlist::Net *net)
 {
 	// VerilogReader names
 	if (net->constant == Netlist::Net::Const::One)
@@ -111,19 +111,6 @@ sta::PortDirection *detail::staDirection(Netlist::Dir dir)
 	}
 }
 
-Netlist::Dir detail::netlistDir(const sta::PortDirection *dir)
-{
-	bool input = dir->isAnyInput();
-	bool output = dir->isAnyOutput();
-	if (input && output)
-		return Netlist::Dir::Inout;
-	if (input)
-		return Netlist::Dir::Input;
-	if (output)
-		return Netlist::Dir::Output;
-	return Netlist::Dir::Unknown;
-}
-
 void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
 {
 	size_t begin = 0;
@@ -137,12 +124,12 @@ void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
 }
 
 // port[bit]
-std::string detail::pinKey(const Netlist &netlist, const Netlist::Pin *pin)
+std::string detail::pinKey(const Yosys::NetView &netlist, const Netlist::Pin *pin)
 {
 	return netlist.shape(pin).name + "[" + std::to_string(netlist.hdlIndex(pin)) + "]";
 }
 
-std::string detail::netKey(const Netlist &netlist, const Netlist::Net *net)
+std::string detail::netKey(const Yosys::NetView &netlist, const Netlist::Net *net)
 {
 	if (net == nullptr)
 		return "-";
@@ -154,7 +141,7 @@ bool detail::NameClaim::operator<(const NameClaim &other) const
 	return std::tie(alias, wire, index) < std::tie(other.alias, other.wire, other.index);
 }
 
-detail::NameClaim detail::netClaim(const Netlist &netlist, Netlist::Net *net)
+detail::NameClaim detail::netClaim(const Yosys::NetView &netlist, Netlist::Net *net)
 {
 	if (net->constant != Netlist::Net::Const::None)
 		return {net, false, "", int(net->constant)};
@@ -171,7 +158,7 @@ void detail::addClaim(NetNames &names, const std::string &name, const NameClaim 
 
 // Canonical names, then each public wire bit by source path and by host
 // name
-void detail::scopeNetNames(const Netlist &netlist, const Netlist::Instance *scope, NetNames &names)
+void detail::scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names)
 {
 	for (Netlist::Net *net : netlist.nets(scope))
 		detail::addClaim(names, detail::staNetName(netlist, net), detail::netClaim(netlist, net));
@@ -245,7 +232,7 @@ bool YosysNetwork::isLinked() const
 	return linked() && (read_stale_ || netlist_->valid());
 }
 
-void YosysNetwork::attach(Netlist *netlist)
+void YosysNetwork::attach(Yosys::NetView *netlist)
 {
 	netlist_ = netlist;
 	// Named as OpenSTA's verilog reader library
@@ -278,7 +265,6 @@ void YosysNetwork::unlink()
 	cell_ports_.clear();
 	inst_cells_.clear();
 	pin_ports_.clear();
-	vertex_ids_.clear();
 	child_names_.clear();
 	net_names_.clear();
 	pin_names_.clear();
@@ -303,7 +289,8 @@ bool YosysNetwork::ports(const YInstance &inst, std::vector<Netlist::PortShape> 
 			shape.from = fromIndex(port);
 			shape.to = toIndex(port);
 		}
-		shape.dir = detail::netlistDir(direction(port));
+		sta::PortDirection *dir = direction(port);
+		shape.dir = Netlist::portDir(dir->isAnyInput(), dir->isAnyOutput());
 	}
 	delete port_iter;
 	return true;
@@ -693,12 +680,12 @@ sta::PortDirection *YosysNetwork::direction(const sta::Pin *pin) const
 
 sta::VertexId YosysNetwork::vertexId(const sta::Pin *pin) const
 {
-	return vertex_ids_.get(asPin(pin)->id);
+	return asPin(pin)->user;
 }
 
 void YosysNetwork::setVertexId(sta::Pin *pin, sta::VertexId id)
 {
-	vertex_ids_[asPin(pin)->id] = id;
+	asPin(pin)->user = id;
 }
 
 ObjectId YosysNetwork::id(const sta::Term *term) const

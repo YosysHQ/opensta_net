@@ -1,7 +1,7 @@
 #ifndef YOSYS_NETWORK_HH
 #define YOSYS_NETWORK_HH
 
-#include "kernel/netlist.h"
+#include "kernel/netview.h"
 
 #include "sta/ConcreteNetwork.hh"
 
@@ -25,16 +25,15 @@ std::string staUnescape(std::string_view name);
 std::string staPath(const std::vector<std::string> &path);
 std::string staInstName(const Netlist::Instance *inst);
 std::string staWireName(const Netlist::NetName &name);
-std::string staNetName(const Netlist &netlist, const Netlist::Net *net);
+std::string staNetName(const Yosys::NetView &netlist, const Netlist::Net *net);
 sta::PortDirection *staDirection(Netlist::Dir dir);
-Netlist::Dir netlistDir(const sta::PortDirection *dir);
 
 // Order of ConcreteNetwork
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
 // Scope body keys
-std::string pinKey(const Netlist &netlist, const Netlist::Pin *pin);
-std::string netKey(const Netlist &netlist, const Netlist::Net *net);
+std::string pinKey(const Yosys::NetView &netlist, const Netlist::Pin *pin);
+std::string netKey(const Yosys::NetView &netlist, const Netlist::Net *net);
 
 // Claim of an STA net name by the source bit that gives it. Canonical names
 // beat aliases, then the smallest bit wins
@@ -49,9 +48,9 @@ using NetNames = std::map<std::string, NameClaim, std::less<>>;
 using ChildNames = std::map<std::string, Netlist::Instance *, std::less<>>;
 using PinNames = std::map<std::string, Netlist::Pin *, std::less<>>;
 using PortNames = std::map<std::string, sta::ConcretePort *, std::less<>>;
-NameClaim netClaim(const Netlist &netlist, Netlist::Net *net);
+NameClaim netClaim(const Yosys::NetView &netlist, Netlist::Net *net);
 void addClaim(NetNames &names, const std::string &name, const NameClaim &claim);
-void scopeNetNames(const Netlist &netlist, const Netlist::Instance *scope, NetNames &names);
+void scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
 void scopeChildNames(const Netlist::Instance *scope, ChildNames &children);
 
 // Map value, or an empty one
@@ -72,7 +71,7 @@ public:
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
 
-	void attach(Netlist *netlist);
+	void attach(Yosys::NetView *netlist);
 	void link();
 	void unlink();
 	bool linked() const;
@@ -167,7 +166,7 @@ private:
 	static const YNet *asNet(const sta::Net *net);
 	static const YTerm *asTerm(const sta::Term *term);
 private:
-	Netlist *netlist_ = nullptr;
+	Yosys::NetView *netlist_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
 	bool read_stale_ = false;
@@ -180,7 +179,6 @@ private:
 	std::unordered_map<const sta::ConcreteCell *, detail::PortNames> cell_ports_; // by unescaped name
 	Yosys::IdMap<sta::ConcreteCell *> inst_cells_;
 	Yosys::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
-	Yosys::IdMap<sta::VertexId> vertex_ids_;      // by pin id
 
 	// Names, by instance id
 	Yosys::IdMap<detail::ChildNames> child_names_;

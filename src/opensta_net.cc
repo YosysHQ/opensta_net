@@ -18,10 +18,6 @@ extern "C" {
 extern int Sta_Init(Tcl_Interp *interp);
 }
 
-YOSYS_NAMESPACE_BEGIN
-extern Pass *current_pass; // kernel/register.cc
-YOSYS_NAMESPACE_END
-
 USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
@@ -54,7 +50,7 @@ void YosysSta::makeReport()
 void YosysSta::makeNetwork()
 {
 	yosys_network = new ysta::YosysNetwork;
-	yosys_network->setBeforeCheck(notePassRun);
+	yosys_network->setBeforeCheck(openEpoch);
 	network_ = yosys_network;
 }
 
@@ -215,6 +211,7 @@ void linkDesign(Design *design)
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
 	the_sta->held.reset();
+	the_sta->yosys_network->setLocked(false);
 	if (!linkView(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
 }
@@ -294,8 +291,13 @@ void warnDroppedParasitics()
 bool canBuild(Design *design)
 {
 	std::string reason;
-	if (NetView::buildable(design, reason))
+	if (NetView::buildable(design, reason)) {
+		the_sta->unbuildable.clear();
 		return true;
+	}
+	if (reason == the_sta->unbuildable)
+		return false;
+	the_sta->unbuildable = reason;
 	log_warning("opensta_net: cannot rebuild the STA network: %s. It stays unlinked until a sync succeeds.\n",
 	            reason.c_str());
 	return false;
@@ -333,12 +335,89 @@ void rebuild(Design *design)
 
 void syncView(Design *design)
 {
+	ysta::YosysNetwork *network = the_sta->yosys_network;
 	the_sta->view.invalidateCheck();
-	if (the_sta->syncing || !needsSync() || !canBuild(design))
+	if (the_sta->syncing || (!network->linked() && !the_sta->held))
+		return;
+	if (!needsSync()) {
+		network->setLocked(false);
+		return;
+	}
+	if (!canBuild(design))
 		return;
 	the_sta->syncing = true;
+	network->setLocked(false);
 	rebuild(design);
 	the_sta->syncing = false;
+}
+
+void closeEpoch()
+{
+	ysta::YosysNetwork *network = the_sta->yosys_network;
+	if (the_sta->syncing || !network->linked() || network->locked())
+		return;
+	network->setLocked(true);
+}
+
+void openEpoch()
+{
+	bool closed = the_sta->yosys_network->locked() || the_sta->held;
+	if (closed && yosys_design != nullptr)
+		syncView(yosys_design);
+}
+
+int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
+{
+	closeEpoch();
+	return TCL_OK;
+}
+
+EpochPass::EpochPass(Pass *inner) : Pass(inner->pass_name, inner->short_help, inner->location), inner(inner)
+{
+	experimental_flag = inner->experimental_flag;
+	internal_flag = inner->internal_flag;
+	call_counter = inner->call_counter;
+	runtime_ns = inner->runtime_ns;
+}
+
+bool EpochPass::replace_existing_pass() const
+{
+	return true;
+}
+
+void EpochPass::help()
+{
+	inner->help();
+}
+
+bool EpochPass::formatted_help()
+{
+	return inner->formatted_help();
+}
+
+void EpochPass::clear_flags()
+{
+	inner->clear_flags();
+}
+
+void EpochPass::on_shutdown()
+{
+	inner->on_shutdown();
+}
+
+bool EpochPass::allow_garbage_collection_during_pass() const
+{
+	return inner->allow_garbage_collection_during_pass();
+}
+
+// Before each pass: the epoch ends
+void EpochPass::execute(std::vector<std::string> args, Design *design)
+{
+	closeEpoch();
+	inner->execute(std::move(args), design);
+	// A plugin load adds passes
+	if (pass_register.size() != the_sta->wrapped)
+		wrapPasses();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
@@ -347,18 +426,6 @@ int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 	if (the_sta->autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
-}
-
-void notePassRun()
-{
-	int calls = -1;
-	if (current_pass != nullptr)
-		calls = current_pass->call_counter;
-	if (current_pass == the_sta->seen_pass && calls == the_sta->seen_calls)
-		return;
-	the_sta->seen_pass = current_pass;
-	the_sta->seen_calls = calls;
-	the_sta->view.invalidateCheck();
 }
 
 void *swigPointer(std::string_view handle, std::string_view type)
@@ -427,21 +494,36 @@ void wrapClockSense()
 		log_error("OpenSTA: cannot wrap set_clock_sense_cmd: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
-void traceLeave(const char *command, const char *handler)
+void traceExecution(const char *command, const char *op, const char *handler)
 {
-	if (!tclEval(std::string("trace add execution ") + command + " leave " + handler))
+	if (!tclEval(std::string("trace add execution ") + command + " " + op + " " + handler))
 		log_error("OpenSTA: cannot trace %s: %s\n", command, Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
 void addTraces()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
+	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::record_result", tclRecordResult, nullptr, nullptr);
 	for (const char *editor : {"yosys", "rtlil::set_attr", "rtlil::set_param"})
-		traceLeave(editor, "ysta::after_yosys");
+		traceExecution(editor, "leave", "ysta::after_yosys");
+	for (const char *editor : {"rtlil::set_attr", "rtlil::set_param"})
+		traceExecution(editor, "enter", "ysta::before_edit");
 	for (const char *getter : {"get_cells", "get_pins", "get_nets", "get_fanin", "get_fanout", "all_registers"})
-		traceLeave(getter, "ysta::record_result");
+		traceExecution(getter, "leave", "ysta::record_result");
+}
+
+void wrapPasses()
+{
+	std::vector<Pass *> passes;
+	for (const auto &[name, pass] : pass_register)
+		if (dynamic_cast<EpochPass *>(pass) == nullptr)
+			passes.push_back(pass);
+	for (Pass *pass : passes)
+		new EpochPass(pass);
+	Pass::init_register();
+	the_sta->wrapped = pass_register.size();
 }
 
 void bootSta()
@@ -451,6 +533,7 @@ void bootSta()
 	makeSta();
 	wrapClockSense();
 	addTraces();
+	wrapPasses();
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 

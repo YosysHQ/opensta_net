@@ -35,16 +35,29 @@ struct ModeSdc {
 	std::string text;
 };
 
+// track pass starts
+struct EpochPass : public Yosys::Pass {
+	Yosys::Pass *inner;
+	explicit EpochPass(Yosys::Pass *inner);
+	bool replace_existing_pass() const override;
+	void help() override;
+	bool formatted_help() override;
+	void clear_flags() override;
+	void on_shutdown() override;
+	bool allow_garbage_collection_during_pass() const override;
+	void execute(std::vector<std::string> args, Design *design) override;
+};
+
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	Yosys::NetView view;
 	Yosys::pool<std::string> liberty_files_read;
 	bool autosync = false;
 	bool syncing = false;
-	Yosys::Pass *seen_pass = nullptr;
-	int seen_calls = -1;
+	size_t wrapped = 0; // the register size at the last wrapPasses
 	// Constraints of a sync whose rebuild failed
 	std::optional<std::vector<ModeSdc>> held;
+	std::string unbuildable;
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -87,10 +100,12 @@ bool canBuild(Design *design);
 bool needsSync();
 void rebuild(Design *design);
 void syncView(Design *design);
+void closeEpoch();
+void openEpoch();
 
 // Tcl traces
+int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-void notePassRun();
 void *swigPointer(std::string_view handle, std::string_view type);
 void recordHandle(std::string_view handle);
 int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
@@ -98,8 +113,9 @@ int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const obj
 // Boot
 void makeSta();
 void wrapClockSense();
-void traceLeave(const char *command, const char *handler);
+void traceExecution(const char *command, const char *op, const char *handler);
 void addTraces();
+void wrapPasses();
 void bootSta();
 
 // opensta_net

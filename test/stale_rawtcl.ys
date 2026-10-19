@@ -1,6 +1,6 @@
 # A design change the Monitor does not report (delete of a wire), then STA
-# commands from raw Tcl: the next pass run re-checks the view, so OpenSTA
-# refuses instead of reading freed objects.
+# commands from raw Tcl: the pass start ended the epoch, so OpenSTA reads a
+# rebuilt network, not freed objects.
 read_liberty -lib test/simple.lib
 read_verilog test/sync.v
 hierarchy -top top

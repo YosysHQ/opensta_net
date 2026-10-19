@@ -1,5 +1,5 @@
 # rtlil::set_attr changes the design without a Monitor event or a pass run:
-# its trace re-checks the view as after a `yosys` command.
+# the pass start hooks end the epoch, as for a `yosys` command.
 yosys read_liberty -lib test/simple.lib
 yosys read_verilog test/rtlil_attr.v
 yosys hierarchy -top top

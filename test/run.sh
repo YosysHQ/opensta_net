@@ -73,8 +73,8 @@ check kh_write_sdc_golden cmp -s test/kh_out.sdc test/kh_out.golden
 expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
 lines m4 test/m4.ys 'slack [a-z_ ]*: [0-9.]+' 'slack baseline: 8.60|slack after yosys edit: 8.70'
 same optflow "$(run test/optflow.ys | grep -E '^(insts|slack):' | tail -n 2)" "$(run test/optflow_fresh.ys | grep -E '^(insts|slack):')"
-expect memo test/memo.ys 'linked before: 1' 'linked after: 0' 'refused: .*No network has been linked'
-lines rtlil_attr test/rtlil_attr.tcl '^(NET|LINKED) .*' 'NET n1|LINKED 0|NET zz|LINKED 1|NET n1'
+expect memo test/memo.ys 'linked before: 1' 'linked after: 1' '^cells: u_dff0 u_inv0 u_inv2 u_x$' 'refused: NO'
+lines rtlil_attr test/rtlil_attr.tcl '^(NET|LINKED) .*' 'NET n1|LINKED 1|NET zz|LINKED 1|NET n1'
 lines top test/top.ys '^insts: [0-9]+|design changed since link' 'insts: 2|design changed since link|insts: 3'
 expect tie test/tie.ys 'tie nets: 1'
 expect nets_exact test/nets_exact.tcl '^EQUAL 1$' '^FAST 1$'
@@ -104,7 +104,7 @@ expect sync_unreported_first test/sync_unreported.ys 'synced after design change
 lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after design change, [0-9]+' \
 	'SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET u1/y|synced after design change, 0|SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET y'
 check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
-expect stale_rawtcl_refuses test/stale_rawtcl.ys 'No network has been linked' '!^SLACK' '^EXIT 1$'
+expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 1 ' '^SLACK 8.85$' '^CELLS 10$'
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
 expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
 expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'

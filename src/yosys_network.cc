@@ -221,6 +221,16 @@ void YosysNetwork::setReadStale(bool on)
 	read_stale_ = on;
 }
 
+void YosysNetwork::setLocked(bool on)
+{
+	locked_ = on;
+}
+
+bool YosysNetwork::locked() const
+{
+	return locked_;
+}
+
 void YosysNetwork::setBeforeCheck(void (*hook)())
 {
 	before_check_ = hook;
@@ -229,7 +239,7 @@ void YosysNetwork::setBeforeCheck(void (*hook)())
 bool YosysNetwork::isLinked() const
 {
 	before_check_();
-	return linked() && (read_stale_ || netlist_->valid());
+	return linked() && !locked_ && (read_stale_ || netlist_->valid());
 }
 
 void YosysNetwork::attach(Yosys::NetView *netlist)

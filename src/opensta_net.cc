@@ -515,7 +515,7 @@ void markKeepHierarchy(const std::set<Netlist::Instance *> &scopes)
 	for (Netlist::Instance *scope : scopes) {
 		RTLIL::Module *module = the_sta->view.module(scope);
 		module->set_bool_attribute(ID::keep_hierarchy);
-		log("opensta_net: keep_hierarchy on %s\n", log_id(module));
+		log("opensta_net: keep_hierarchy on %s\n", module);
 	}
 	log("opensta_net: marked %zu modules keep_hierarchy.\n", scopes.size());
 }

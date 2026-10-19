@@ -149,7 +149,7 @@ std::vector<std::string> sdcCommands(const std::string &text)
 
 void countScope(const Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins)
 {
-	nets += the_sta->view.nets(scope).size();
+	nets += the_sta->view->nets(scope).size();
 	for (const Netlist::Instance *child : scope->children) {
 		insts++;
 		pins += child->pins.size();
@@ -162,8 +162,8 @@ void logCounts(long ms)
 {
 	size_t insts = 0;
 	size_t nets = 0;
-	size_t pins = the_sta->view.top()->pins.size();
-	countScope(the_sta->view.top(), insts, nets, pins);
+	size_t pins = the_sta->view->top()->pins.size();
+	countScope(the_sta->view->top(), insts, nets, pins);
 	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
 }
 
@@ -181,7 +181,8 @@ void dropView()
 		the_sta->networkChanged();
 		network->unlink();
 	}
-	the_sta->view.reset();
+	if (the_sta->view->built())
+		the_sta->retired_views.push_back(std::exchange(the_sta->view, the_sta->view->retire()));
 }
 
 bool linkView(Design *design, std::string &error)
@@ -189,13 +190,13 @@ bool linkView(Design *design, std::string &error)
 	dropView();
 	auto t0 = std::chrono::steady_clock::now();
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	network->attach(&the_sta->view);
+	network->attach(the_sta->view.get());
 	try {
-		the_sta->view.build(design, network);
+		the_sta->view->build(design, network);
 		network->link();
 	} catch (const sta::Exception &exception) {
 		network->unlink();
-		the_sta->view.reset();
+		the_sta->view->reset();
 		error = exception.what();
 		return false;
 	}
@@ -307,7 +308,7 @@ bool needsSync()
 {
 	if (the_sta->held)
 		return true;
-	return the_sta->yosys_network->linked() && !the_sta->view.valid();
+	return the_sta->yosys_network->linked() && !the_sta->view->valid();
 }
 
 void rebuild(Design *design)
@@ -336,7 +337,7 @@ void rebuild(Design *design)
 void syncView(Design *design)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	the_sta->view.invalidateCheck();
+	the_sta->view->invalidateCheck();
 	if (the_sta->syncing || (!network->linked() && !the_sta->held))
 		return;
 	if (!needsSync()) {
@@ -422,7 +423,7 @@ void EpochPass::execute(std::vector<std::string> args, Design *design)
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	the_sta->view.invalidateCheck();
+	the_sta->view->invalidateCheck();
 	if (the_sta->autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
@@ -566,7 +567,7 @@ void linkOrSync(Design *design, const Options &opt)
 		return;
 	}
 	// Passes may have run since the last call
-	the_sta->view.invalidateCheck();
+	the_sta->view->invalidateCheck();
 	if (!opt.sync && needsSync())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
@@ -584,8 +585,8 @@ void sourceSdc(Design *design, const Options &opt)
 	bool ok = sourceFile(opt.sdc_file, true);
 	std::set<Netlist::Instance *> scopes = network->endRecording();
 	checkSourced(ok, opt.sdc_file);
-	the_sta->view.invalidateCheck();
-	if (!the_sta->view.valid()) {
+	the_sta->view->invalidateCheck();
+	if (!the_sta->view->valid()) {
 		log_warning("opensta_net: design changed while the constraints were read, nothing marked.\n");
 		syncView(design);
 		return;
@@ -597,7 +598,7 @@ void markKeepHierarchy(const std::set<Netlist::Instance *> &scopes)
 {
 	pool<RTLIL::Module *> modules;
 	for (Netlist::Instance *scope : scopes)
-		modules.insert(the_sta->view.module(scope));
+		modules.insert(the_sta->view->module(scope));
 	for (RTLIL::Module *module : modules) {
 		module->set_bool_attribute(ID::keep_hierarchy);
 		log("opensta_net: keep_hierarchy on %s\n", module);

@@ -179,24 +179,38 @@ void detail::scopeChildNames(const Netlist::Instance *scope, ChildNames &childre
 	}
 }
 
-const YInstance *YosysNetwork::asInst(const sta::Instance *inst)
+void YosysNetwork::checkOwner(const YInstance *inst) const
 {
-	return reinterpret_cast<const YInstance *>(inst);
+	if (inst != nullptr && inst->netlist != netlist_)
+		report_->error(2931, "a handle of an earlier network names no object, get the object again.");
 }
 
-const YPin *YosysNetwork::asPin(const sta::Pin *pin)
+const YInstance *YosysNetwork::asInst(const sta::Instance *inst) const
 {
-	return reinterpret_cast<const YPin *>(pin);
+	const YInstance *record = reinterpret_cast<const YInstance *>(inst);
+	checkOwner(record);
+	return record;
 }
 
-const YNet *YosysNetwork::asNet(const sta::Net *net)
+const YPin *YosysNetwork::asPin(const sta::Pin *pin) const
 {
-	return reinterpret_cast<const YNet *>(net);
+	const YPin *record = reinterpret_cast<const YPin *>(pin);
+	checkOwner(record != nullptr ? record->inst : nullptr);
+	return record;
 }
 
-const YTerm *YosysNetwork::asTerm(const sta::Term *term)
+const YNet *YosysNetwork::asNet(const sta::Net *net) const
 {
-	return reinterpret_cast<const YTerm *>(term);
+	const YNet *record = reinterpret_cast<const YNet *>(net);
+	checkOwner(record != nullptr ? record->scope : nullptr);
+	return record;
+}
+
+const YTerm *YosysNetwork::asTerm(const sta::Term *term) const
+{
+	const YTerm *record = reinterpret_cast<const YTerm *>(term);
+	checkOwner(record != nullptr ? record->pin->inst : nullptr);
+	return record;
 }
 
 bool YosysNetwork::linkNetwork(std::string_view, bool, sta::Report *report)

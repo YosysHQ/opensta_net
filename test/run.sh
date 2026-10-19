@@ -117,6 +117,7 @@ expect eval_quotes test/eval_quotes.ys '^42$'
 expect noop_clean test/noop_clean.ys 'built network' '!synced after design change'
 expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'
 expect lost_rename test/lost_rename.tcl 'synced after design change, 0 constraint' '^LOAD w0$'
+expect stale_handle test/stale_handle.tcl '^CAUGHT Error: 2931' '^FRESH u_inv2/Y$'
 for t in attr_refused read_verilog_refused clear_network_refused; do
 	expect $t test/$t.tcl '^CAUGHT Error: 2929' '^SLACK 8.60$'
 done

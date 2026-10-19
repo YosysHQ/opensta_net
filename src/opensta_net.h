@@ -6,6 +6,7 @@
 
 #include <tcl.h>
 
+#include <memory>
 #include <optional>
 
 #include "sta/ReportTcl.hh"
@@ -50,8 +51,9 @@ struct EpochPass : public Yosys::Pass {
 
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
-	Yosys::NetView view;
+	std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
 	Yosys::pool<std::string> liberty_files_read;
+	std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
 	bool autosync = false;
 	bool syncing = false;
 	size_t wrapped = 0; // the register size at the last wrapPasses

@@ -163,11 +163,11 @@ private:
 	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
 	void recordScope(YInstance *scope) const;
-	static const YInstance *asInst(const sta::Instance *inst);
-	static const YPin *asPin(const sta::Pin *pin);
-	static const YNet *asNet(const sta::Net *net);
-	static const YTerm *asTerm(const sta::Term *term);
-private:
+	void checkOwner(const YInstance *inst) const;
+	const YInstance *asInst(const sta::Instance *inst) const;
+	const YPin *asPin(const sta::Pin *pin) const;
+	const YNet *asNet(const sta::Net *net) const;
+	const YTerm *asTerm(const sta::Term *term) const;
 	Yosys::NetView *netlist_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;

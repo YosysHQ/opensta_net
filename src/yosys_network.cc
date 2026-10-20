@@ -267,6 +267,50 @@ void YosysNetwork::setBeforeCheck(void (*hook)())
 	before_check_ = hook;
 }
 
+void YosysNetwork::setTokens(std::vector<Token> *tokens)
+{
+	tokens_ = tokens;
+	token_index_.clear();
+}
+
+// one stable token per object, write_sdc sorts by name
+std::string YosysNetwork::token(Token::Kind kind, const void *object) const
+{
+	auto [it, fresh] = token_index_.try_emplace(object, tokens_->size());
+	if (fresh)
+		tokens_->push_back({kind, object});
+	return std::string(detail::token_prefix) + std::to_string(it->second);
+}
+
+std::string YosysNetwork::pathName(const sta::Instance *instance) const
+{
+	if (tokens_ != nullptr && instance != topInstance())
+		return token(Token::Kind::Cell, instance);
+	return sta::Network::pathName(instance);
+}
+
+std::string YosysNetwork::pathName(const sta::Pin *pin) const
+{
+	if (tokens_ != nullptr)
+		return token(Token::Kind::Pin, pin);
+	return sta::Network::pathName(pin);
+}
+
+// write_sdc writes top ports by name
+std::string YosysNetwork::name(const sta::Port *port) const
+{
+	if (tokens_ != nullptr && cell(port) == reinterpret_cast<sta::Cell *>(top_cell_))
+		return token(Token::Kind::Port, port);
+	return sta::ConcreteNetwork::name(port);
+}
+
+std::string YosysNetwork::pathName(const sta::Net *net) const
+{
+	if (tokens_ != nullptr)
+		return token(Token::Kind::Net, net);
+	return sta::Network::pathName(net);
+}
+
 bool YosysNetwork::isLinked() const
 {
 	before_check_();

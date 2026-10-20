@@ -19,6 +19,8 @@ using YTerm = Yosys::Netlist::Term;
 
 namespace detail {
 
+constexpr std::string_view token_prefix = "__ysta_tok_";
+
 // Names
 std::string staName(std::string_view raw);
 std::string staPath(const std::vector<std::string> &path);
@@ -65,6 +67,19 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 } // namespace detail
 
+// a Port token holds the sta::Port, not its pin
+struct Token {
+	enum class Kind : uint8_t {
+		Pin,
+		Cell,
+		Net,
+		Port
+	};
+
+	Kind kind;
+	const void *object;
+};
+
 class YosysNetwork : public sta::ConcreteNetwork, public Netlist::PortModel {
 public:
 	using sta::ConcreteNetwork::name;
@@ -102,6 +117,12 @@ public:
 	sta::Cell *cell(const sta::Instance *instance) const override;
 	sta::Instance *parent(const sta::Instance *instance) const override;
 	bool isLeaf(const sta::Instance *instance) const override;
+	std::string pathName(const sta::Instance *instance) const override;
+	std::string pathName(const sta::Pin *pin) const override;
+	std::string pathName(const sta::Net *net) const override;
+	std::string name(const sta::Port *port) const override;
+	void setTokens(std::vector<Token> *tokens);
+	std::string token(Token::Kind kind, const void *object) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, const sta::Port *port) const override;
@@ -173,6 +194,8 @@ private:
 	bool read_stale_ = false;
 	bool locked_ = false;
 	size_t shared_names_ = 0; // nets with the canonical name of another net
+	std::vector<Token> *tokens_ = nullptr;
+	mutable std::unordered_map<const void *, size_t> token_index_;
 	void (*before_check_)() = nullptr;
 
 	// Cells and ports

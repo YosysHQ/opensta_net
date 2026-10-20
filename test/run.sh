@@ -91,6 +91,7 @@ same uniq_fold "$(UNIQ_V=test/uniq.v sta test/uniq_ref.tcl | between UNIQ)" "$(r
 for t in bus bus_asc; do
 	same $t "$(sta test/${t}_ref.tcl)" "$(run test/$t.ys | grep -E '^(u1|slack)')"
 done
+same bus1 "$(sta test/bus1_ref.tcl | grep '^BUS1')" "$(run test/bus1.ys | grep '^BUS1')"
 stress_ref=$(sta test/stress_ref.tcl | sed 's/line [0-9]*/line N/')
 stress_out=$(run test/stress.ys | sed -n '/^--- ports ---$/,$p' | sed '/^End of script/,$d' | sed 's/line [0-9]*/line N/')
 check stress cmp -s <(diff <(echo "$stress_ref") <(echo "$stress_out")) test/stress_waiver
@@ -110,14 +111,20 @@ expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1
 expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'
 expect parasitics_warned test/parasitics.tcl 'drops the loaded parasitics'
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
+expect boot_fail test/boot_fail.tcl 'ERROR: OpenSTA: cannot wrap find_fanout_insts' '!^BOOTED' '!^ALIVE' '^EXIT 1$'
 expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
 lines link_fail test/link_fail.tcl '^(SLACK|SYNC|AUTOSYNC) .*' 'SLACK 8.60|SYNC 0 0|SLACK 8.60|AUTOSYNC 0|SLACK 8.60'
 expect sdc_write_fail test/sdc_write_fail.tcl '^SYNC 0 0$' '^CLOCKS 1$'
 expect eval_quotes test/eval_quotes.ys '^42$'
+expect fanout_empty test/fanout_empty.tcl '^FANOUT 0 0$' '^FANIN 0 0$'
+expect shared_names test/shared_names.ys '1 net\(s\) have the name of another net'
+expect dup_hdlname test/dup_hdlname.tcl '^CELL u_inv1$' '^CELL u_inv2$' '^out \(output\) .*\(MET\)$'
 expect noop_clean test/noop_clean.ys 'built network' '!synced after design change'
 expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'
 expect lost_rename test/lost_rename.tcl 'synced after design change, 0 constraint' '^LOAD w0$'
 expect stale_handle test/stale_handle.tcl '^CAUGHT Error: 2931' '^FRESH u_inv2/Y$'
+expect id_overflow test/id_overflow.tcl '^REFUSED$' 'more than the 32-bit object ids hold'
+expect reset_refused test/reset_refused.tcl '!^CLOCKS 0' 'CAUGHT Error: 2929 delete_all_memory' '^SLACK 8.60$'
 for t in attr_refused read_verilog_refused clear_network_refused; do
 	expect $t test/$t.tcl '^CAUGHT Error: 2929' '^SLACK 8.60$'
 done

@@ -147,31 +147,12 @@ std::vector<std::string> sdcCommands(const std::string &text)
 	return commands;
 }
 
-void countScope(const Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins)
+void warnSharedNames()
 {
-	nets += the_sta->view->nets(scope).size();
-	for (const Netlist::Instance *child : scope->children) {
-		insts++;
-		pins += child->pins.size();
-		if (!child->leaf)
-			countScope(child, insts, nets, pins);
-	}
-}
-
-void logCounts(long ms)
-{
-	size_t insts = 0;
-	size_t nets = 0;
-	size_t pins = the_sta->view->top()->pins.size();
-	countScope(the_sta->view->top(), insts, nets, pins);
-	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
-}
-
-void warnStubTypes()
-{
-	for (const std::string &type : the_sta->yosys_network->takeStubTypes())
-		log_warning("opensta_net: no liberty cell for type %s, made a stub cell. Its instances contribute no "
-		            "timing arcs.\n", type.c_str());
+	size_t shared = the_sta->yosys_network->takeSharedNames();
+	if (shared > 0)
+		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that name "
+		            "finds the other net.\n", shared);
 }
 
 void dropView()
@@ -200,9 +181,10 @@ bool linkView(Design *design, std::string &error)
 		error = exception.what();
 		return false;
 	}
-	warnStubTypes();
-	auto elapsed = std::chrono::steady_clock::now() - t0;
-	logCounts(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+	warnSharedNames();
+	long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+	auto [insts, nets, pins] = the_sta->view->counts();
+	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
 	return true;
 }
 
@@ -470,7 +452,21 @@ int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const obj
 	return TCL_OK;
 }
 
-void makeSta()
+bool tclFailure(const std::string &what, std::string &error)
+{
+	error = what + ": " + Tcl_GetStringResult(yosys_get_tcl_interp());
+	return false;
+}
+
+bool evalStaInit(Tcl_Interp *interp)
+{
+	char *script = sta::unencode(sta::tcl_inits);
+	bool ok = Tcl_Eval(interp, script) == TCL_OK;
+	delete[] script;
+	return ok;
+}
+
+bool makeSta(std::string &error)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	sta::initSta();
@@ -480,39 +476,27 @@ void makeSta()
 	the_sta->setTclInterp(interp);
 	the_sta->setThreadCount(1);
 	if (Sta_Init(interp) != TCL_OK)
-		log_error("OpenSTA: Sta_Init failed: %s\n", Tcl_GetStringResult(interp));
-	sta::evalTclInit(interp, sta::tcl_inits);
+		return tclFailure("Sta_Init failed", error);
+	if (!evalStaInit(interp))
+		return tclFailure("the init scripts failed", error);
 	if (!tclEval("init_sta_cmds"))
-		log_error("OpenSTA: init_sta_cmds failed: %s\n", Tcl_GetStringResult(interp));
+		return tclFailure("init_sta_cmds failed", error);
+	return true;
 }
 
-void wrapClockSense()
+bool bootTcl(std::string &error)
 {
-	std::string wrap = "rename ::sta::set_clock_sense_cmd ::sta::ysta_set_clock_sense_cmd; "
-	                   "proc ::sta::set_clock_sense_cmd {pins args} "
-	                   "{ if {[llength $pins]} { ::sta::ysta_set_clock_sense_cmd $pins {*}$args } }";
-	if (!tclEval(wrap))
-		log_error("OpenSTA: cannot wrap set_clock_sense_cmd: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
-}
-
-void traceExecution(const char *command, const char *op, const char *handler)
-{
-	if (!tclEval(std::string("trace add execution ") + command + " " + op + " " + handler))
-		log_error("OpenSTA: cannot trace %s: %s\n", command, Tcl_GetStringResult(yosys_get_tcl_interp()));
-}
-
-void addTraces()
-{
+	static const char *script =
+#include "trace.inc"
+	    ;
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::record_result", tclRecordResult, nullptr, nullptr);
-	for (const char *editor : {"yosys", "rtlil::set_attr", "rtlil::set_param"})
-		traceExecution(editor, "leave", "ysta::after_yosys");
-	for (const char *editor : {"rtlil::set_attr", "rtlil::set_param"})
-		traceExecution(editor, "enter", "ysta::before_edit");
-	for (const char *getter : {"get_cells", "get_pins", "get_nets", "get_fanin", "get_fanout", "all_registers"})
-		traceExecution(getter, "leave", "ysta::record_result");
+	if (tclEval(script))
+		return true;
+	error = Tcl_GetStringResult(interp);
+	return false;
 }
 
 void wrapPasses()
@@ -531,9 +515,9 @@ void bootSta()
 {
 	if (the_sta != nullptr)
 		return;
-	makeSta();
-	wrapClockSense();
-	addTraces();
+	std::string error;
+	if (!makeSta(error) || !bootTcl(error))
+		log_error("OpenSTA: %s\n", error.c_str());
 	wrapPasses();
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
@@ -608,7 +592,7 @@ void markKeepHierarchy(const std::set<Netlist::Instance *> &scopes)
 
 void readLiberty(const std::string &file)
 {
-	if (the_sta->liberty_files_read.count(file)) {
+	if (the_sta->network()->findLibertyFilename(file) != nullptr) {
 		log("opensta_net: liberty file %s already loaded, skipping.\n", file.c_str());
 		return;
 	}
@@ -620,7 +604,6 @@ void readLiberty(const std::string &file)
 	}
 	if (lib == nullptr)
 		log_cmd_error("OpenSTA: failed to read liberty file %s.\n", file.c_str());
-	the_sta->liberty_files_read.insert(file);
 }
 
 bool sourceFile(const std::string &file, bool sdc)

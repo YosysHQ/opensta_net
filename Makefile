@@ -5,6 +5,7 @@ YOSYS_BUILD := $(abspath $(YOSYS_SRC))/build
 YOSYS_CONFIG := $(YOSYS_BUILD)/yosys-config
 YOSYS := $(YOSYS_BUILD)/yosys
 STA_ROOT := $(abspath $(OPENSTA))
+YOSYS_HEADERS = $(wildcard $(YOSYS_BUILD)/share/include/kernel/*.h)
 
 STA_LIBS = $(STA_ROOT)/build/sta_swig.a $(STA_ROOT)/build/libOpenSTA.a
 STA_INC = -I$(STA_ROOT)/include -I$(STA_ROOT)/include/sta -I$(STA_ROOT)/build/include/sta -I$(STA_ROOT)/search
@@ -15,11 +16,14 @@ HAVE_TOOLCHAIN := $(shell printf '#include <tcl.h>\n#include <zlib.h>\n' | $(CXX
 
 all: opensta_net.so
 
-opensta_net.so: $(SRCS) src/opensta_net.h src/yosys_network.hh $(STA_LIBS)
+opensta_net.so: $(SRCS) src/trace.inc src/opensta_net.h src/yosys_network.hh $(STA_LIBS) $(YOSYS_HEADERS) Makefile
 ifneq ($(HAVE_TOOLCHAIN),yes)
 	$(error tcl.h or zlib.h not found: build inside the toolchain shell, e.g. nix-shell --run "make $(MAKECMDGOALS)")
 endif
 	$(YOSYS_CONFIG) --build $@ $(SRCS) $(STA_INC) $(STA_LIBS) -lcudd -lz -ltcl
+
+src/trace.inc: src/trace.tcl
+	{ printf 'R"TCL('; cat $<; printf ')TCL"\n'; } > $@
 
 .PHONY: smoke
 smoke: opensta_net.so
@@ -32,6 +36,6 @@ test: opensta_net.so
 
 .PHONY: clean
 clean:
-	rm -f opensta_net.so
+	rm -f opensta_net.so src/trace.inc
 	rm -rf conformance/work
 	rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v

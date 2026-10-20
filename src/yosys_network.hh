@@ -21,7 +21,6 @@ namespace detail {
 
 // Names
 std::string staName(std::string_view raw);
-std::string staUnescape(std::string_view name);
 std::string staPath(const std::vector<std::string> &path);
 std::string staInstName(const Netlist::Instance *inst);
 std::string staWireName(const Netlist::NetName &name);
@@ -47,11 +46,12 @@ struct NameClaim {
 using NetNames = std::map<std::string, NameClaim, std::less<>>;
 using ChildNames = std::map<std::string, Netlist::Instance *, std::less<>>;
 using PinNames = std::map<std::string, Netlist::Pin *, std::less<>>;
-using PortNames = std::map<std::string, sta::ConcretePort *, std::less<>>;
 NameClaim netClaim(const Yosys::NetView &netlist, Netlist::Net *net);
 void addClaim(NetNames &names, const std::string &name, const NameClaim &claim);
-void scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
-void scopeChildNames(const Netlist::Instance *scope, ChildNames &children);
+size_t scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
+std::vector<std::string> childNames(const Netlist::Instance *scope, std::vector<std::string> &own);
+void scopeChildNames(const Netlist::Instance *scope, const std::vector<std::string> &names,
+                     const std::vector<std::string> &own, ChildNames &children);
 
 // Map value, or an empty one
 template <typename Map, typename K> const typename Map::mapped_type &lookup(const Map &map, const K &key)
@@ -75,7 +75,7 @@ public:
 	void link();
 	void unlink();
 	bool linked() const;
-	std::vector<std::string> takeStubTypes();
+	size_t takeSharedNames();
 
 	void beginRecording();
 	std::set<YInstance *> endRecording();
@@ -151,9 +151,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeStubCell(const YInstance &inst);
 	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::PortShape> &shapes);
-	void indexPorts(sta::ConcreteCell *ccell);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
@@ -162,6 +160,7 @@ private:
 	std::string freeCellName(const YInstance *scope) const;
 	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
+	const std::string &instName(const YInstance *inst) const;
 	void recordScope(YInstance *scope) const;
 	void checkOwner(const YInstance *inst) const;
 	const YInstance *asInst(const sta::Instance *inst) const;
@@ -173,18 +172,17 @@ private:
 	sta::ConcreteCell *top_cell_ = nullptr;
 	bool read_stale_ = false;
 	bool locked_ = false;
+	size_t shared_names_ = 0; // nets with the canonical name of another net
 	void (*before_check_)() = nullptr;
-	std::vector<std::string> stub_types_;
-	std::vector<YInstance *> scopes_; // top and hierarchical instances
 
 	// Cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
-	std::unordered_map<const sta::ConcreteCell *, detail::PortNames> cell_ports_; // by unescaped name
 	Yosys::IdMap<sta::ConcreteCell *> inst_cells_;
 	Yosys::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
 
 	// Names, by instance id
 	Yosys::IdMap<detail::ChildNames> child_names_;
+	Yosys::IdMap<std::string> inst_names_;
 	Yosys::IdMap<detail::NetNames> net_names_;
 	Yosys::IdMap<detail::PinNames> pin_names_; // "D", "A[3]"
 

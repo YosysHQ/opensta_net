@@ -52,7 +52,6 @@ struct EpochPass : public Yosys::Pass {
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
-	Yosys::pool<std::string> liberty_files_read;
 	std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
 	bool autosync = false;
 	bool syncing = false;
@@ -85,9 +84,7 @@ std::string normalizeCommand(const std::string &cmd);
 std::vector<std::string> sdcCommands(const std::string &text);
 
 // Build
-void countScope(const Yosys::Netlist::Instance *scope, size_t &insts, size_t &nets, size_t &pins);
-void logCounts(long ms);
-void warnStubTypes();
+void warnSharedNames();
 void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);
@@ -113,10 +110,10 @@ void recordHandle(std::string_view handle);
 int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 
 // Boot
-void makeSta();
-void wrapClockSense();
-void traceExecution(const char *command, const char *op, const char *handler);
-void addTraces();
+bool tclFailure(const std::string &what, std::string &error);
+bool evalStaInit(Tcl_Interp *interp);
+bool makeSta(std::string &error);
+bool bootTcl(std::string &error);
 void wrapPasses();
 void bootSta();
 

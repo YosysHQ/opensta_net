@@ -193,7 +193,9 @@ void linkDesign(Design *design)
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
-	the_sta->held.reset();
+	the_sta->constraints = {};
+	the_sta->view->clearAnchors(design);
+	tclEval("::ysta::clear");
 	the_sta->yosys_network->setLocked(false);
 	if (!linkView(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
@@ -214,48 +216,13 @@ bool writeModeSdc(const std::string &mode, std::string &text)
 	return ok;
 }
 
-bool staleConstraints(std::vector<ModeSdc> &result)
+bool writeAllModes(ModeTexts &result)
 {
-	bool ok = true;
-	the_sta->yosys_network->setReadStale(true);
 	for (const sta::Mode *mode : the_sta->modes()) {
-		ModeSdc &sdc = result.emplace_back();
-		sdc.mode = mode->name();
-		ok = ok && writeModeSdc(sdc.mode, sdc.text);
+		if (!writeModeSdc(mode->name(), result[mode->name()]))
+			return false;
 	}
-	the_sta->yosys_network->setReadStale(false);
-	return ok;
-}
-
-int applyCommands(const std::vector<std::string> &commands)
-{
-	Tcl_Interp *interp = yosys_get_tcl_interp();
-	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
-	int lost = 0;
-	for (const std::string &cmd : commands) {
-		int warnings = report->warnings;
-		bool failed = Tcl_EvalEx(interp, cmd.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK;
-		if (failed)
-			log_warning("opensta_net: sync: `%s` failed: %s\n", normalizeCommand(cmd).c_str(), Tcl_GetStringResult(interp));
-		lost += failed || report->warnings != warnings;
-	}
-	return lost;
-}
-
-int reapplyConstraints(const std::vector<ModeSdc> &before)
-{
-	std::string cmd_mode = the_sta->cmdMode()->name();
-	sta::Scene *cmd_scene = the_sta->cmdScene();
-	tclEval("set ::ysta::script [info script]; info script {}");
-	int lost = 0;
-	for (const ModeSdc &mode : before) {
-		the_sta->setCmdMode(mode.mode);
-		lost += applyCommands(sdcCommands(mode.text));
-	}
-	the_sta->setCmdMode(cmd_mode);
-	the_sta->setCmdScene(cmd_scene);
-	tclEval("info script $::ysta::script");
-	return lost;
+	return true;
 }
 
 void warnDroppedParasitics()
@@ -275,12 +242,12 @@ bool canBuild(Design *design)
 {
 	std::string reason;
 	if (NetView::buildable(design, reason)) {
-		the_sta->unbuildable.clear();
+		the_sta->unbuildable_reason.clear();
 		return true;
 	}
-	if (reason == the_sta->unbuildable)
+	if (reason == the_sta->unbuildable_reason)
 		return false;
-	the_sta->unbuildable = reason;
+	the_sta->unbuildable_reason = reason;
 	log_warning("opensta_net: cannot rebuild the STA network: %s. It stays unlinked until a sync succeeds.\n",
 	            reason.c_str());
 	return false;
@@ -288,31 +255,22 @@ bool canBuild(Design *design)
 
 bool needsSync()
 {
-	if (the_sta->held)
-		return true;
-	return the_sta->yosys_network->linked() && !the_sta->view->valid();
+	return the_sta->rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->view->valid());
 }
 
 void rebuild(Design *design)
 {
-	std::vector<ModeSdc> before;
-	if (the_sta->held) {
-		before = std::move(*the_sta->held);
-		the_sta->held.reset();
-	} else if (!staleConstraints(before)) {
-		log_warning("opensta_net: cannot write the constraints, the STA network stays stale.\n");
-		return;
-	} else {
-		warnDroppedParasitics();
-	}
+	warnDroppedParasitics();
 	std::string error;
 	if (!linkView(design, error)) {
-		the_sta->held = std::move(before);
+		the_sta->rebuild_pending = true;
 		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync succeeds.\n",
 		            error.c_str());
 		return;
 	}
-	int lost = reapplyConstraints(before);
+	the_sta->rebuild_pending = false;
+	tclEval("::ysta::clear");
+	int lost = applyConstraints();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
 }
 
@@ -320,7 +278,7 @@ void syncView(Design *design)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	the_sta->view->invalidateCheck();
-	if (the_sta->syncing || (!network->linked() && !the_sta->held))
+	if (the_sta->syncing || (!network->linked() && !the_sta->rebuild_pending))
 		return;
 	if (!needsSync()) {
 		network->setLocked(false);
@@ -339,12 +297,17 @@ void closeEpoch()
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	if (the_sta->syncing || !network->linked() || network->locked())
 		return;
+	the_sta->view->invalidateCheck();
+	if (!the_sta->view->valid())
+		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
+	else if (!injectConstraints())
+		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: they are lost.\n");
 	network->setLocked(true);
 }
 
 void openEpoch()
 {
-	bool closed = the_sta->yosys_network->locked() || the_sta->held;
+	bool closed = the_sta->yosys_network->locked() || the_sta->rebuild_pending;
 	if (closed && yosys_design != nullptr)
 		syncView(yosys_design);
 }
@@ -399,7 +362,7 @@ void EpochPass::execute(std::vector<std::string> args, Design *design)
 	closeEpoch();
 	inner->execute(std::move(args), design);
 	// A plugin load adds passes
-	if (pass_register.size() != the_sta->wrapped)
+	if (pass_register.size() != the_sta->wrapped_passes)
 		wrapPasses();
 }
 
@@ -508,7 +471,7 @@ void wrapPasses()
 	for (Pass *pass : passes)
 		new EpochPass(pass);
 	Pass::init_register();
-	the_sta->wrapped = pass_register.size();
+	the_sta->wrapped_passes = pass_register.size();
 }
 
 void bootSta()
@@ -659,7 +622,8 @@ void OpenstaNetPass::help()
 	log("\n");
 	log("    -sync\n");
 	log("        if the design changed since the view was built, rebuild it and\n");
-	log("        re-apply the current constraints. Every call does this implicitly.\n");
+	log("        apply the constraints again. Every call and every OpenSTA query\n");
+	log("        does this implicitly.\n");
 	log("\n");
 	log("    -autosync\n");
 	log("        also sync after every `yosys`, `rtlil::set_attr` or `rtlil::set_param`\n");

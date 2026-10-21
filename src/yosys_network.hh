@@ -69,13 +69,7 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 // a Port token holds the sta::Port, not its pin
 struct Token {
-	enum class Kind : uint8_t {
-		Pin,
-		Cell,
-		Net,
-		Port
-	};
-
+	using Kind = Yosys::NetView::Found::Kind;
 	Kind kind;
 	const void *object;
 };
@@ -103,7 +97,6 @@ public:
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
-	void setReadStale(bool on);
 	void setLocked(bool on);
 	bool locked() const;
 	void setBeforeCheck(void (*hook)());
@@ -191,7 +184,6 @@ private:
 	Yosys::NetView *netlist_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
-	bool read_stale_ = false;
 	bool locked_ = false;
 	size_t shared_names_ = 0; // nets with the canonical name of another net
 	std::vector<Token> *tokens_ = nullptr;

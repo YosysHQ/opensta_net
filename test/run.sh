@@ -63,6 +63,17 @@ ref() {
 	same "$1" "$want" "$got"
 }
 
+# constraints that the sync after the passes reports lost or changed, as
+# command and value, their count and the exit code
+track() {
+	local got
+	got=$(PASS="$2" run test/track.tcl | sed -nE -e 's/^(EXIT [0-9]+)$/\1/p' \
+		-e 's/.*(synced after design change, [0-9]+).*/\1/p' \
+		-e 's/.*sync: `([a-z_]+) .* ([0-9]+\.[0-9]+)` lost or changed.*/\1 \2/p' -e 't' \
+		-e 's/.*sync: `([a-z_]+) .*` lost or changed.*/\1/p' | LC_ALL=C sort | paste -sd '|')
+	check "$1" [ "$got" = "$3" ]
+}
+
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
 # keep_hierarchy marking
@@ -105,6 +116,8 @@ expect sync_unreported_first test/sync_unreported.ys 'synced after design change
 lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after design change, [0-9]+' \
 	'SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET u1/y|synced after design change, 0|SLACK 1.65|CELL u1/r u1/u2/j|PIN u1/r/Q u1/u2/k/Y|NET u1/mid u1/u2/n|WILD u1/u2/j u1/u2/k u1/r/D|QNET y'
 check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
+# constraints on renamed objects stay, by the anchors
+track track_autoname autoname 'EXIT 0|synced after design change, 0'
 expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 1 ' '^SLACK 8.85$' '^CELLS 10$'
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
 expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
@@ -114,10 +127,12 @@ expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
 expect boot_fail test/boot_fail.tcl 'ERROR: OpenSTA: cannot wrap find_fanout_insts' '!^BOOTED' '!^ALIVE' '^EXIT 1$'
 expect eval_error test/eval_error.tcl '^CAUGHT$' '^ALIVE$'
 lines link_fail test/link_fail.tcl '^(SLACK|SYNC|AUTOSYNC) .*' 'SLACK 8.60|SYNC 0 0|SLACK 8.60|AUTOSYNC 0|SLACK 8.60'
-expect sdc_write_fail test/sdc_write_fail.tcl '^SYNC 0 0$' '^CLOCKS 1$'
+expect sdc_write_fail test/sdc_write_fail.tcl '^SYNC 0 1$' '^CLOCKS 1$' '^KEPT 1 1 1$' '!lacks'
 expect eval_quotes test/eval_quotes.ys '^42$'
 expect fanout_empty test/fanout_empty.tcl '^FANOUT 0 0$' '^FANIN 0 0$'
 expect shared_names test/shared_names.ys '1 net\(s\) have the name of another net'
+expect shared_thru test/shared_thru.tcl '^AFTER y 0 z 1$' 'synced after design change, 0 '
+expect divider_cell test/divider_cell.tcl '^BEFORE y 1 z 0$' '^AFTER y 1 z 0$' 'synced after design change, 0 '
 expect dup_hdlname test/dup_hdlname.tcl '^CELL u_inv1$' '^CELL u_inv2$' '^out \(output\) .*\(MET\)$'
 expect noop_clean test/noop_clean.ys 'built network' '!synced after design change'
 expect sdc_error test/sdc_error.tcl '^CAUGHT$' '^CLOCKS 1$' 'sdc_error.sdc line 3'

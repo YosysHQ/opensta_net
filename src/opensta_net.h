@@ -7,7 +7,6 @@
 #include <tcl.h>
 
 #include <memory>
-#include <optional>
 
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
@@ -17,6 +16,9 @@
 namespace opensta_net {
 
 using Yosys::RTLIL::Design;
+
+struct YosysSta;
+extern YosysSta *the_sta;
 
 // Feeds a message to every log sink but the console, which the Tcl channel
 // serves, so STA and Tcl output keep their order there
@@ -30,10 +32,30 @@ struct YosysStaReport : public sta::ReportTcl {
 	size_t printString(const char *buffer, size_t length) override;
 };
 
-// Constraints of one mode as SDC text
-struct ModeSdc {
-	std::string mode;
+using ModeTexts = Yosys::dict<std::string, std::string>;
+
+struct Ref : Yosys::NetView::Found {
+	std::string name;
+};
+
+struct Word {
 	std::string text;
+	std::vector<Word> nested_words;
+	std::vector<uint32_t> refs;
+	bool nested = false;
+};
+
+struct Command {
+	std::string mode;
+	std::string text; // with tokens
+	std::string log_text;
+	std::vector<Word> words;
+};
+
+struct Constraints {
+	std::vector<Command> commands;
+	std::deque<Ref> refs;
+	std::vector<Yosys::NetView::Found *> view_refs;
 };
 
 // track pass starts
@@ -55,10 +77,11 @@ struct YosysSta : public sta::Sta {
 	std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
 	bool autosync = false;
 	bool syncing = false;
-	size_t wrapped = 0; // the register size at the last wrapPasses
-	// Constraints of a sync whose rebuild failed
-	std::optional<std::vector<ModeSdc>> held;
-	std::string unbuildable;
+	size_t wrapped_passes = 0;
+	Constraints constraints;
+	std::vector<ysta::Token> tokens;
+	bool rebuild_pending = false;
+	std::string unbuildable_reason;
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -89,11 +112,9 @@ void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);
 
-// Sync
+// Epochs
 bool writeModeSdc(const std::string &mode, std::string &text);
-bool staleConstraints(std::vector<ModeSdc> &result);
-int applyCommands(const std::vector<std::string> &commands);
-int reapplyConstraints(const std::vector<ModeSdc> &before);
+bool writeAllModes(ModeTexts &result);
 void warnDroppedParasitics();
 bool canBuild(Design *design);
 bool needsSync();
@@ -101,6 +122,28 @@ void rebuild(Design *design);
 void syncView(Design *design);
 void closeEpoch();
 void openEpoch();
+
+// Constraints
+bool parseWords(const std::string &script, std::vector<Word> &words);
+void parseSubstitution(const std::string &inner, Word &word);
+void parseGetter(const std::string &inner, Word &word);
+std::vector<ysta::Token> tokensIn(const std::string &text);
+std::string objectName(Ref::Kind kind, const void *object);
+std::string tokenName(const ysta::Token &token);
+void addJournal(ModeTexts &modes);
+std::string tclQuoted(const std::string &text);
+std::string untoken(const std::string &text);
+std::string commandName(const std::string &script);
+std::vector<uint32_t> refsOf(const std::vector<Word> &words);
+std::string handleOf(Ref::Kind kind, const void *object);
+std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through);
+bool isThroughFlag(const std::string &word);
+std::string refHandles(const Ref &ref, bool after_through);
+bool injectConstraints();
+std::string missingNames(const std::vector<Word> &words);
+int tclInt(const std::string &script);
+bool applyCommand(const Command &command, std::string &reason);
+int applyConstraints();
 
 // Tcl traces
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);

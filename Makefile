@@ -10,7 +10,7 @@ YOSYS_HEADERS = $(wildcard $(YOSYS_BUILD)/share/include/kernel/*.h)
 STA_LIBS = $(STA_ROOT)/build/sta_swig.a $(STA_ROOT)/build/libOpenSTA.a
 STA_INC = -I$(STA_ROOT)/include -I$(STA_ROOT)/include/sta -I$(STA_ROOT)/build/include/sta -I$(STA_ROOT)/search
 
-SRCS = src/opensta_net.cc src/yosys_network.cc
+SRCS = src/opensta_net.cc src/yosys_network.cc src/constraints.cc
 
 HAVE_TOOLCHAIN := $(shell printf '#include <tcl.h>\n#include <zlib.h>\n' | $(CXX) -E -x c++ - > /dev/null 2>&1 && echo yes)
 

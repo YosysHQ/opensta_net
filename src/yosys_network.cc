@@ -247,11 +247,6 @@ size_t YosysNetwork::takeSharedNames()
 	return std::exchange(shared_names_, 0);
 }
 
-void YosysNetwork::setReadStale(bool on)
-{
-	read_stale_ = on;
-}
-
 void YosysNetwork::setLocked(bool on)
 {
 	locked_ = on;
@@ -314,7 +309,7 @@ std::string YosysNetwork::pathName(const sta::Net *net) const
 bool YosysNetwork::isLinked() const
 {
 	before_check_();
-	return linked() && !locked_ && (read_stale_ || netlist_->valid());
+	return linked() && !locked_ && netlist_->valid();
 }
 
 void YosysNetwork::attach(Yosys::NetView *netlist)

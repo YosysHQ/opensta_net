@@ -118,7 +118,8 @@ lines flat_sync test/flat.ys '^(SLACK|CELL|PIN|NET|WILD|QNET) .*|synced after de
 check flat_sdc cmp -s test/flat_1.sdc test/flat_2.sdc
 # constraints on renamed objects stay, by the anchors
 track track_autoname autoname 'EXIT 0|synced after design change, 0'
-expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 1 ' '^SLACK 8.85$' '^CELLS 10$'
+track track_flatten flatten 'EXIT 0|synced after design change, 0'
+expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 0 ' '^SLACK 8.85$' '^CELLS 10$'
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
 expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
 expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'

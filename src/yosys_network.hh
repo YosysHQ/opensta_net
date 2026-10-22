@@ -74,7 +74,7 @@ struct Token {
 	const void *object;
 };
 
-class YosysNetwork : public sta::ConcreteNetwork, public Netlist::PortModel {
+class YosysNetwork : public sta::ConcreteNetwork, public Netlist::LeafModel {
 public:
 	using sta::ConcreteNetwork::name;
 	using sta::ConcreteNetwork::cell;
@@ -94,6 +94,8 @@ public:
 	void recordNet(const YNet *net) const;
 
 	bool ports(const YInstance &inst, std::vector<Netlist::PortShape> &out) override;
+	bool isRegister(const YInstance &inst) override;
+	bool isClockPin(const YPin &pin) override;
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
@@ -110,6 +112,8 @@ public:
 	sta::Cell *cell(const sta::Instance *instance) const override;
 	sta::Instance *parent(const sta::Instance *instance) const override;
 	bool isLeaf(const sta::Instance *instance) const override;
+	// in token mode, so write_sdc writes a hierarchical -through pin as itself
+	bool isLeaf(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Instance *instance) const override;
 	std::string pathName(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Net *net) const override;

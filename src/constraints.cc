@@ -175,20 +175,29 @@ bool isThroughFlag(const std::string &word)
 	return word == "-through" || word == "-rise_through" || word == "-fall_through";
 }
 
-std::string refHandles(const Ref &ref, bool after_through)
+std::string refHandles(Ref &ref, bool after_through)
 {
 	// a -through net that flatten grew takes its pins in the old scope
 	bool use_through = !ref.through_pins.empty() && after_through;
+	ref.plain = ref.plain || !after_through;
 	Ref::Kind kind = use_through ? Ref::Kind::Pin : ref.kind;
-	const std::vector<const void *> &objects = use_through ? ref.through_pins : ref.objects;
+	const std::vector<const void *> *objects = use_through ? &ref.through_pins : &ref.objects;
+	if (!use_through && !ref.use.empty())
+		objects = &ref.use;
 	std::string handles;
-	for (const void *object : objects) {
+	for (const void *object : *objects) {
 		if (kind == Ref::Kind::Port)
 			handles += " [get_ports " + tclQuoted(objectName(kind, object)) + "]";
 		else
 			handles += " " + handleOf(kind, object);
 	}
 	return handles;
+}
+
+void markRefs(const std::vector<Word> &words, bool Ref::*flag)
+{
+	for (uint32_t index : refsOf(words))
+		the_sta->constraints.refs[index].*flag = true;
 }
 
 std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through)
@@ -203,7 +212,7 @@ std::string render(const std::vector<Word> &words, int &empty_getters, bool afte
 			std::string handles;
 			for (uint32_t index : word.refs)
 				handles += refHandles(the_sta->constraints.refs[index], through);
-			empty_getters += handles.empty();
+			empty_getters += handles.empty() && !onlyImages(word);
 			text += "[list" + handles + "]";
 		} else if (word.nested) {
 			text += "[" + render(word.nested_words, empty_getters, through) + "]";
@@ -237,10 +246,15 @@ bool injectConstraints()
 			command.mode = mode;
 			command.text = text;
 			parseWords(text, command.words);
+			if (isClockCommand(commandName(text)))
+				markRefs(command.words, &Ref::image);
 			command.log_text = untoken(text);
 		}
 	}
-	the_sta->view->anchor(the_sta->constraints.view_refs);
+	if (the_sta->protect)
+		the_sta->view->protect(the_sta->constraints.view_refs);
+	else
+		the_sta->view->anchor(the_sta->constraints.view_refs);
 	return journaled;
 }
 
@@ -264,12 +278,58 @@ void addJournal(ModeTexts &modes)
 		modes[Tcl_GetString(items[i])] += Tcl_GetString(items[i + 1]);
 }
 
+bool isClockCommand(const std::string &name)
+{
+	return name == "create_clock" || name == "create_generated_clock";
+}
+
+// refs that flatten moved inside, a -through or a clock on an input pin keeps its meaning
+std::string movedInside(const std::vector<Word> &words)
+{
+	bool clock = !words.empty() && isClockCommand(words[0].text);
+	std::string names;
+	for (uint32_t index : refsOf(words)) {
+		const Ref &ref = the_sta->constraints.refs[index];
+		if (ref.inside && ref.plain && !(clock && ref.hier == Netlist::Dir::Input))
+			names += (names.empty() ? "" : " ") + ref.name;
+	}
+	return names;
+}
+
+bool anyUnprotected(const std::vector<Word> &words)
+{
+	for (uint32_t index : refsOf(words)) {
+		if (the_sta->constraints.refs[index].unprotected)
+			return true;
+	}
+	return false;
+}
+
+bool foundAny(const std::vector<Word> &words)
+{
+	for (uint32_t index : refsOf(words)) {
+		if (!the_sta->constraints.refs[index].objects.empty())
+			return true;
+	}
+	return false;
+}
+
+// a getter of image pins only, opensta ignores their clock attributes
+bool onlyImages(const Word &word)
+{
+	for (uint32_t index : word.refs) {
+		if (!the_sta->constraints.refs[index].image_pin)
+			return false;
+	}
+	return true;
+}
+
 std::string missingNames(const std::vector<Word> &words)
 {
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const Ref &ref = the_sta->constraints.refs[index];
-		if (ref.objects.empty())
+		if (ref.objects.empty() && !ref.image_pin)
 			names += (names.empty() ? "" : " ") + ref.name;
 	}
 	return names;
@@ -280,11 +340,17 @@ bool applyCommand(const Command &command, std::string &reason)
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
 	int empty_getters = 0;
+	applyClockImages(command.words);
 	std::string script = command.words.empty() ? command.text : render(command.words, empty_getters, false);
 	std::string missing = missingNames(command.words);
+	std::string moved = movedInside(command.words);
 	// an empty getter would widen a path exception
 	if (empty_getters > 0) {
 		reason = "no object found for " + missing;
+		return false;
+	}
+	if (!refsOf(command.words).empty() && !foundAny(command.words)) {
+		reason = "-unprotect removed the barrier that kept its hierarchical pin";
 		return false;
 	}
 	int warnings = report->warnings;
@@ -300,7 +366,93 @@ bool applyCommand(const Command &command, std::string &reason)
 		reason = "applied without " + missing;
 		return false;
 	}
+	return keptMeaning(command.words, moved, reason);
+}
+
+bool keptMeaning(const std::vector<Word> &words, const std::string &moved, std::string &reason)
+{
+	if (anyUnprotected(words)) {
+		reason = "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
+		return false;
+	}
+	if (!moved.empty()) {
+		reason = "applied, flatten moved it to the leaf pins inside: " + moved;
+		return false;
+	}
 	return true;
+}
+
+bool hasFlag(const std::vector<Word> &words, const std::string &flag)
+{
+	for (const Word &word : words) {
+		if (word.text == flag)
+			return true;
+	}
+	return false;
+}
+
+void applyClockImages(const std::vector<Word> &words)
+{
+	if (words.empty())
+		return;
+	if (isClockCommand(words[0].text))
+		clockImages(words, ClockUse::Clock);
+	else if (words[0].text == "set_clock_latency" && hasFlag(words, "-source"))
+		clockImages(words, ClockUse::SourceLatency);
+	else if (words[0].text == "set_clock_latency")
+		clockImages(words, ClockUse::NetworkLatency);
+}
+
+void clockImages(const std::vector<Word> &words, ClockUse use)
+{
+	for (size_t i = 0; i < words.size(); i++) {
+		bool source = i > 0 && words[i - 1].text == "-source";
+		for (uint32_t index : words[i].refs)
+			clockImage(the_sta->constraints.refs[index], use, source);
+		clockImages(words[i].nested_words, use);
+	}
+}
+
+// where a clock use of a hierarchical pin goes when flatten removed the pin
+void clockImage(Ref &ref, ClockUse use, bool source)
+{
+	using Dir = Netlist::Dir;
+	if (use == ClockUse::Clock && ref.hier == Dir::Input && !source)
+		ref.use = loadsInside(ref);
+	else if (!ref.inside)
+		return;
+	else if (use == ClockUse::NetworkLatency && !ref.beyond.empty())
+		ref.use = ref.beyond;
+	else if (use != ClockUse::NetworkLatency && (ref.hier == Dir::Output || source) && !ref.image_a.empty())
+		ref.use = ref.image_a;
+	else if (use == ClockUse::SourceLatency && ref.hier == Dir::Input && !ref.image_y.empty())
+		ref.use = ref.image_y;
+	else
+		return;
+	ref.inside = false;
+}
+
+// with the y pins of the image
+std::vector<const void *> loadsInside(const Ref &ref)
+{
+	std::vector<const void *> loads;
+	if (ref.inside)
+		loads = ref.objects;
+	else
+		addInnerLoads(ref.objects, loads);
+	if (loads.empty())
+		return ref.objects;
+	loads.insert(loads.end(), ref.image_y.begin(), ref.image_y.end());
+	return loads;
+}
+
+void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads)
+{
+	for (const void *object : pins) {
+		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
+		if (pin->term != nullptr)
+			the_sta->view->innerPins(pin->term->net, false, loads);
+	}
 }
 
 int tclInt(const std::string &script)
@@ -313,8 +465,11 @@ int applyConstraints()
 {
 	Constraints &constraints = the_sta->constraints;
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	for (Ref &ref : constraints.refs)
+	for (Ref &ref : constraints.refs) {
 		ref.top_pin = ref.kind == Ref::Kind::Port ? network->findPin(network->topInstance(), ref.name) : nullptr;
+		ref.plain = false;
+		ref.use.clear();
+	}
 	the_sta->view->resolve(constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();

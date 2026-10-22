@@ -36,6 +36,14 @@ using ModeTexts = Yosys::dict<std::string, std::string>;
 
 struct Ref : Yosys::NetView::Found {
 	std::string name;
+	bool plain = false;                 // used outside a -through
+	std::vector<const void *> use = {}; // objects of a clock use, else objects
+};
+
+enum class ClockUse : uint8_t {
+	Clock,
+	SourceLatency,
+	NetworkLatency
 };
 
 struct Word {
@@ -82,6 +90,7 @@ struct YosysSta : public sta::Sta {
 	std::vector<ysta::Token> tokens;
 	bool rebuild_pending = false;
 	std::string unbuildable_reason;
+	bool protect = true; // barriers at each epoch end, until -unprotect
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -138,11 +147,24 @@ std::vector<uint32_t> refsOf(const std::vector<Word> &words);
 std::string handleOf(Ref::Kind kind, const void *object);
 std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through);
 bool isThroughFlag(const std::string &word);
-std::string refHandles(const Ref &ref, bool after_through);
+std::string refHandles(Ref &ref, bool after_through);
+void markRefs(const std::vector<Word> &words, bool Ref::*flag);
 bool injectConstraints();
+bool isClockCommand(const std::string &name);
+std::string movedInside(const std::vector<Word> &words);
+bool anyUnprotected(const std::vector<Word> &words);
+bool foundAny(const std::vector<Word> &words);
+bool onlyImages(const Word &word);
 std::string missingNames(const std::vector<Word> &words);
 int tclInt(const std::string &script);
 bool applyCommand(const Command &command, std::string &reason);
+bool keptMeaning(const std::vector<Word> &words, const std::string &moved, std::string &reason);
+bool hasFlag(const std::vector<Word> &words, const std::string &flag);
+void applyClockImages(const std::vector<Word> &words);
+void clockImages(const std::vector<Word> &words, ClockUse use);
+void clockImage(Ref &ref, ClockUse use, bool source);
+std::vector<const void *> loadsInside(const Ref &ref);
+void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads);
 int applyConstraints();
 
 // Tcl traces

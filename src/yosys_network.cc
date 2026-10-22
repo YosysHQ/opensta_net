@@ -262,6 +262,11 @@ void YosysNetwork::setBeforeCheck(void (*hook)())
 	before_check_ = hook;
 }
 
+bool YosysNetwork::isLeaf(const sta::Pin *pin) const
+{
+	return tokens_ != nullptr || sta::Network::isLeaf(pin);
+}
+
 void YosysNetwork::setTokens(std::vector<Token> *tokens)
 {
 	tokens_ = tokens;
@@ -380,6 +385,18 @@ bool YosysNetwork::ports(const YInstance &inst, std::vector<Netlist::PortShape> 
 	}
 	delete port_iter;
 	return true;
+}
+
+bool YosysNetwork::isRegister(const YInstance &inst)
+{
+	const sta::LibertyCell *cell = libertyCell(reinterpret_cast<const sta::Instance *>(&inst));
+	return cell != nullptr && cell->isSequential();
+}
+
+bool YosysNetwork::isClockPin(const YPin &pin)
+{
+	const sta::LibertyPort *port = libertyPort(reinterpret_cast<const sta::Pin *>(&pin));
+	return port != nullptr && port->isClock();
 }
 
 void YosysNetwork::buildTables(YInstance *scope)

@@ -490,7 +490,8 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
 	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync},
-	                                             {"-autosync", &opt.autosync}, {"-keep_hierarchy", &opt.keep_hierarchy}};
+	                                             {"-autosync", &opt.autosync}, {"-keep_hierarchy", &opt.keep_hierarchy},
+	                                             {"-protect", &opt.protect}, {"-unprotect", &opt.unprotect}};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -601,6 +602,19 @@ void evalTcl(const std::string &cmd)
 		log("%s\n", result);
 }
 
+// the sync after -unprotect applies the constraints by the anchors only
+void setProtection(Design *design, const Options &opt)
+{
+	if (opt.protect)
+		the_sta->protect = true;
+	if (!opt.unprotect)
+		return;
+	the_sta->protect = false;
+	the_sta->yosys_network->setLocked(false);
+	the_sta->view->unprotect(design);
+	syncView(design);
+}
+
 OpenstaNetPass::OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}
 
 void OpenstaNetPass::help()
@@ -624,6 +638,14 @@ void OpenstaNetPass::help()
 	log("        if the design changed since the view was built, rebuild it and\n");
 	log("        apply the constraints again. Every call and every OpenSTA query\n");
 	log("        does this implicitly.\n");
+	log("\n");
+	log("    -protect\n");
+	log("        put $barrier cells at the objects that the constraints name, before\n");
+	log("        each pass (the default). Passes keep the barriers and the logic\n");
+	log("        between them.\n");
+	log("\n");
+	log("    -unprotect\n");
+	log("        remove the barriers (before write_verilog) and put no new ones.\n");
 	log("\n");
 	log("    -autosync\n");
 	log("        also sync after every `yosys`, `rtlil::set_attr` or `rtlil::set_param`\n");
@@ -663,6 +685,7 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 		checkSourced(sourceFile(opt.source_file, false), opt.source_file);
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
+	setProtection(design, opt);
 }
 
 OpenstaNetPass opensta_net_pass;

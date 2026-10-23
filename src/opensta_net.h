@@ -107,7 +107,7 @@ public:
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false, sync = false, autosync = false, keep_hierarchy = false;
+	bool link = false, sync = false, autosync = false, keep_hierarchy = false, protect = false, unprotect = false;
 };
 
 // Tcl
@@ -192,6 +192,7 @@ bool sourceFile(const std::string &file, bool sdc);
 void checkSourced(bool ok, const std::string &file);
 std::string unquote(const std::string &arg);
 void evalTcl(const std::string &cmd);
+void setProtection(Design *design, const Options &opt);
 
 struct OpenstaNetPass : public Yosys::Pass {
 	OpenstaNetPass();

@@ -107,7 +107,7 @@ public:
 
 struct Options {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false, sync = false, autosync = false, keep_hierarchy = false, protect = false, unprotect = false;
+	bool link = false, sync = false, autosync = false, protect = false, unprotect = false;
 };
 
 // Tcl
@@ -170,9 +170,6 @@ int applyConstraints();
 // Tcl traces
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-void *swigPointer(std::string_view handle, std::string_view type);
-void recordHandle(std::string_view handle);
-int tclRecordResult(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 
 // Boot
 bool tclFailure(const std::string &what, std::string &error);
@@ -185,8 +182,6 @@ void bootSta();
 // opensta_net
 size_t parseOptions(const std::vector<std::string> &args, Options &opt);
 void linkOrSync(Design *design, const Options &opt);
-void sourceSdc(Design *design, const Options &opt);
-void markKeepHierarchy(const std::set<Yosys::Netlist::Instance *> &scopes);
 void readLiberty(const std::string &file);
 bool sourceFile(const std::string &file, bool sdc);
 void checkSourced(bool ok, const std::string &file);

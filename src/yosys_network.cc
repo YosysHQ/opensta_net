@@ -356,8 +356,6 @@ void YosysNetwork::unlink()
 	pin_names_.clear();
 	master_uses_.clear();
 	scope_cells_.clear();
-	recording_ = false;
-	recorded_.clear();
 	clearNetDrvrPinMap();
 }
 
@@ -539,61 +537,6 @@ sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bo
 	return reinterpret_cast<sta::ConcreteCell *>(scell);
 }
 
-void YosysNetwork::beginRecording()
-{
-	recording_ = true;
-	recorded_.clear();
-}
-
-std::set<YInstance *> YosysNetwork::endRecording()
-{
-	recording_ = false;
-	return std::move(recorded_);
-}
-
-bool YosysNetwork::recording() const
-{
-	return recording_;
-}
-
-void YosysNetwork::recordScope(YInstance *scope) const
-{
-	for (; scope != nullptr && !netlist_->isTop(scope); scope = scope->parent) {
-		// Ancestors already recorded
-		if (!recorded_.insert(scope).second)
-			return;
-	}
-}
-
-void YosysNetwork::recordInstance(const sta::Instance *instance) const
-{
-	if (!recording_ || instance == nullptr)
-		return;
-	YInstance *inst = const_cast<YInstance *>(asInst(instance));
-	if (inst->leaf)
-		recordScope(inst->parent);
-	else
-		recordScope(inst);
-}
-
-void YosysNetwork::recordPin(const sta::Pin *pin) const
-{
-	if (!recording_ || pin == nullptr)
-		return;
-	const YPin *ypin = asPin(pin);
-	recordInstance(reinterpret_cast<const sta::Instance *>(ypin->inst));
-	const YNet *net = ypin->net;
-	if (net == nullptr && ypin->term != nullptr)
-		net = ypin->term->net;
-	recordNet(net);
-}
-
-void YosysNetwork::recordNet(const YNet *net) const
-{
-	if (recording_ && net != nullptr)
-		recordScope(net->scope);
-}
-
 sta::Instance *YosysNetwork::topInstance() const
 {
 	if (!linked())
@@ -644,20 +587,14 @@ bool YosysNetwork::isLeaf(const sta::Instance *instance) const
 
 sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_view name) const
 {
-	YInstance *child = detail::lookup(child_names_.get(asInst(parent)->id), name);
-	sta::Instance *instance = reinterpret_cast<sta::Instance *>(child);
-	recordInstance(instance);
-	return instance;
+	return reinterpret_cast<sta::Instance *>(detail::lookup(child_names_.get(asInst(parent)->id), name));
 }
 
 sta::Pin *YosysNetwork::findPin(const sta::Instance *instance, std::string_view port_name) const
 {
-	sta::Pin *pin = reinterpret_cast<sta::Pin *>(detail::lookup(pin_names_.get(asInst(instance)->id), port_name));
-	recordPin(pin);
-	return pin;
+	return reinterpret_cast<sta::Pin *>(detail::lookup(pin_names_.get(asInst(instance)->id), port_name));
 }
 
-// By port object: how STA walks instances, so not recorded
 sta::Pin *YosysNetwork::findPin(const sta::Instance *instance, const sta::Port *port) const
 {
 	return reinterpret_cast<sta::Pin *>(detail::lookup(pin_names_.get(asInst(instance)->id), name(port)));
@@ -695,38 +632,6 @@ sta::InstanceNetIterator *YosysNetwork::netIterator(const sta::Instance *instanc
 			nets.push_back(claim.net);
 	}
 	return detail::castIterator<sta::Net *>(nets);
-}
-
-sta::InstanceSeq YosysNetwork::findInstancesMatching(const sta::Instance *context, const sta::PatternMatch *pattern) const
-{
-	sta::InstanceSeq matches = sta::Network::findInstancesMatching(context, pattern);
-	for (const sta::Instance *instance : matches)
-		recordInstance(instance);
-	return matches;
-}
-
-sta::InstanceSeq YosysNetwork::findInstancesHierMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const
-{
-	sta::InstanceSeq matches = sta::Network::findInstancesHierMatching(instance, pattern);
-	for (const sta::Instance *match : matches)
-		recordInstance(match);
-	return matches;
-}
-
-sta::PinSeq YosysNetwork::findPinsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const
-{
-	sta::PinSeq matches = sta::Network::findPinsMatching(instance, pattern);
-	for (const sta::Pin *pin : matches)
-		recordPin(pin);
-	return matches;
-}
-
-sta::PinSeq YosysNetwork::findPinsHierMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const
-{
-	sta::PinSeq matches = sta::Network::findPinsHierMatching(instance, pattern);
-	for (const sta::Pin *pin : matches)
-		recordPin(pin);
-	return matches;
 }
 
 ObjectId YosysNetwork::id(const sta::Pin *pin) const
@@ -798,9 +703,7 @@ ObjectId YosysNetwork::id(const sta::Net *net) const
 
 sta::Net *YosysNetwork::findNet(const sta::Instance *instance, std::string_view net_name) const
 {
-	YNet *net = detail::lookup(net_names_.get(asInst(instance)->id), net_name).net;
-	recordNet(net);
-	return reinterpret_cast<sta::Net *>(net);
+	return reinterpret_cast<sta::Net *>(detail::lookup(net_names_.get(asInst(instance)->id), net_name).net);
 }
 
 void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern, sta::NetSeq &matches) const
@@ -812,10 +715,8 @@ void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta
 	}
 	std::set<const YNet *> seen;
 	for (const auto &[name, claim] : net_names_.get(asInst(instance)->id)) {
-		if (pattern->match(name) && seen.insert(claim.net).second) {
-			recordNet(claim.net);
+		if (pattern->match(name) && seen.insert(claim.net).second)
 			matches.push_back(reinterpret_cast<sta::Net *>(claim.net));
-		}
 	}
 }
 

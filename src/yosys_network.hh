@@ -86,13 +86,6 @@ public:
 	bool linked() const;
 	size_t takeSharedNames();
 
-	void beginRecording();
-	std::set<YInstance *> endRecording();
-	bool recording() const;
-	void recordInstance(const sta::Instance *instance) const;
-	void recordPin(const sta::Pin *pin) const;
-	void recordNet(const YNet *net) const;
-
 	bool ports(const YInstance &inst, std::vector<Netlist::PortShape> &out) override;
 	bool isRegister(const YInstance &inst) override;
 	bool isClockPin(const YPin &pin) override;
@@ -127,10 +120,6 @@ public:
 	sta::InstanceChildIterator *childIterator(const sta::Instance *instance) const override;
 	sta::InstancePinIterator *pinIterator(const sta::Instance *instance) const override;
 	sta::InstanceNetIterator *netIterator(const sta::Instance *instance) const override;
-	sta::InstanceSeq findInstancesMatching(const sta::Instance *context, const sta::PatternMatch *pattern) const override;
-	sta::InstanceSeq findInstancesHierMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const override;
-	sta::PinSeq findPinsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const override;
-	sta::PinSeq findPinsHierMatching(const sta::Instance *instance, const sta::PatternMatch *pattern) const override;
 
 	// Pin
 	sta::ObjectId id(const sta::Pin *pin) const override;
@@ -179,7 +168,6 @@ private:
 	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
 	const std::string &instName(const YInstance *inst) const;
-	void recordScope(YInstance *scope) const;
 	void checkOwner(const YInstance *inst) const;
 	const YInstance *asInst(const sta::Instance *inst) const;
 	const YPin *asPin(const sta::Pin *pin) const;
@@ -208,10 +196,6 @@ private:
 	// Link time: hierarchical instances per master, scope cells by master and body
 	std::map<std::string, int, std::less<>> master_uses_;
 	std::map<std::string, sta::ConcreteCell *, std::less<>> scope_cells_;
-
-	// Recording
-	mutable bool recording_ = false;
-	mutable std::set<YInstance *> recorded_;
 };
 
 } // namespace ysta

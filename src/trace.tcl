@@ -14,8 +14,6 @@ foreach {cmd why} {
 foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ysta::after_yosys }
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ysta::before_edit }
-# record getter results for -keep_hierarchy
-foreach cmd {get_cells get_pins get_nets get_fanin get_fanout all_registers} { trace add execution $cmd leave ysta::record_result }
 # sdc commands since the last epoch end, as {mode command}
 namespace eval ::ysta {
 	variable journal {}

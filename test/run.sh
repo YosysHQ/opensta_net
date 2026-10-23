@@ -76,11 +76,6 @@ track() {
 
 rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
 
-# keep_hierarchy marking
-expect kh test/kh.ys
-expect kh2 test/kh2.ys
-check kh_write_sdc_golden cmp -s test/kh_out.sdc test/kh_out.golden
-
 expect m1 test/m1.ys 'insts: 4 pins: 11 nets: 6' 'slack \(MET\)'
 lines m4 test/m4.ys 'slack [a-z_ ]*: [0-9.]+' 'slack baseline: 8.60|slack after yosys edit: 8.70'
 same optflow "$(run test/optflow.ys | grep -E '^(insts|slack):' | tail -n 2)" "$(run test/optflow_fresh.ys | grep -E '^(insts|slack):')"

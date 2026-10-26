@@ -25,6 +25,18 @@ endif
 src/trace.inc: src/trace.tcl
 	{ printf 'R"TCL('; cat $<; printf ')TCL"\n'; } > $@
 
+# yosys builds in its own nix shell
+.PHONY: deps yosys opensta
+deps: yosys opensta
+
+yosys:
+	cd $(YOSYS_SRC) && nix develop -c sh -c "test -f build/build.ninja || cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release"
+	cd $(YOSYS_SRC) && nix develop -c cmake --build build
+
+opensta:
+	test -f $(OPENSTA)/build/build.ninja || cmake -S $(OPENSTA) -B $(OPENSTA)/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+	cmake --build $(OPENSTA)/build
+
 .PHONY: smoke
 smoke: opensta_net.so
 	$(YOSYS) -m ./opensta_net.so -p 'opensta_net -eval report_units'

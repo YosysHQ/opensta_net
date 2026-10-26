@@ -1,8 +1,28 @@
 # opensta-adapter
 
-Yosys plugin that runs OpenSTA on the live design. It implements OpenSTA's `sta::Network` over the read-only Yosys `Netlist` interface (`kernel/netlist.h`) and re-applies the constraints after each design change.
+Yosys plugin that runs OpenSTA on the live design. OpenSTA reads a view of the design in memory, and after each pass every constraint is kept or reported lost.
+
+### Build and test
 
     git submodule update --init --recursive
-    (cd deps/yosys && nix develop -c sh -c "cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build")
-    nix-shell --run "cmake -S deps/OpenSTA -B deps/OpenSTA/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POSITION_INDEPENDENT_CODE=ON && cmake --build deps/OpenSTA/build"
-    nix-shell --run "make && make test"
+    nix-shell --run "make deps"
+    nix-shell --run "make test"
+
+### Use
+
+    deps/yosys/build/yosys -m ./opensta_net.so -c run.tcl
+
+with `run.tcl`:
+
+    yosys read_verilog top.v
+    yosys synth -top top
+    yosys dfflibmap -liberty cells.lib
+    yosys abc -liberty cells.lib
+    yosys opensta_net -liberty cells.lib -link
+    yosys opensta_net -sdc top.sdc
+    report_checks
+    yosys autoname
+    report_checks
+    yosys opensta_net -unprotect
+    yosys write_verilog out.v
+

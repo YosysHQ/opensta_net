@@ -153,7 +153,7 @@ size_t detail::scopeNetNames(const Yosys::NetView &netlist, const Netlist::Insta
 		shared += names.count(name);
 		detail::addClaim(names, name, detail::netClaim(netlist, net));
 	}
-	for (const Netlist::Alias &alias : netlist.aliases(scope)) {
+	for (const Netlist::NetAlias &alias : netlist.aliases(scope)) {
 		NameClaim claim = {alias.net, true, alias.name.wire, alias.name.index};
 		Netlist::NetName host = alias.name;
 		host.hdlpath.clear();
@@ -362,7 +362,7 @@ void YosysNetwork::unlink()
 bool YosysNetwork::ports(const YInstance &inst, std::vector<Netlist::PortShape> &out)
 {
 	sta::LibertyCell *lcell = findLibertyCell(inst.type.c_str());
-	if (lcell == nullptr && inst.internal)
+	if (lcell == nullptr && inst.kind == Netlist::Instance::Kind::InternalLeaf)
 		report_->error(2923, "internal cell type {} has no liberty cell, map the design first "
 		                     "(techmap/dfflibmap/abc, or icell_liberty).", inst.type);
 	if (lcell == nullptr)
@@ -405,7 +405,7 @@ void YosysNetwork::buildTables(YInstance *scope)
 		inst_names_[scope->children[i]->id] = names[i];
 	detail::scopeChildNames(scope, names, own, child_names_[scope->id]);
 	for (YInstance *child : scope->children) {
-		if (!child->leaf) {
+		if (!child->isLeaf()) {
 			buildTables(child);
 			inst_cells_[child->id] = scopeCell(child);
 		}
@@ -471,7 +471,7 @@ std::string YosysNetwork::freeCellName(const YInstance *scope) const
 void YosysNetwork::countMasters(const YInstance *scope)
 {
 	for (const YInstance *child : scope->children) {
-		if (!child->leaf) {
+		if (!child->isLeaf()) {
 			master_uses_[child->master]++;
 			countMasters(child);
 		}
@@ -497,7 +497,7 @@ sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const
 // Cell, pin ports and port-bit names of an instance
 void YosysNetwork::indexPins(YInstance *inst)
 {
-	if (inst->leaf)
+	if (inst->isLeaf())
 		inst_cells_[inst->id] = typeCell(*inst);
 	detail::PinNames &names = pin_names_[inst->id];
 	for (YPin *pin : inst->pins) {
@@ -582,7 +582,7 @@ sta::Instance *YosysNetwork::parent(const sta::Instance *instance) const
 
 bool YosysNetwork::isLeaf(const sta::Instance *instance) const
 {
-	return asInst(instance)->leaf;
+	return asInst(instance)->isLeaf();
 }
 
 sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_view name) const
@@ -754,9 +754,9 @@ sta::ConstantPinIterator *YosysNetwork::constantPinIterator()
 {
 	sta::NetSet zero_nets(this);
 	sta::NetSet one_nets(this);
-	for (YNet *net : netlist_->constNets(false))
+	for (YNet *net : netlist_->constNets(Netlist::Net::Const::Zero))
 		zero_nets.insert(reinterpret_cast<sta::Net *>(net));
-	for (YNet *net : netlist_->constNets(true))
+	for (YNet *net : netlist_->constNets(Netlist::Net::Const::One))
 		one_nets.insert(reinterpret_cast<sta::Net *>(net));
 	return new sta::NetworkConstantPinIterator(this, zero_nets, one_nets);
 }

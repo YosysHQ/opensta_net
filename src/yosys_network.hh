@@ -74,7 +74,7 @@ struct Token {
 	const void *object;
 };
 
-class YosysNetwork : public sta::ConcreteNetwork, public Netlist::LeafModel {
+class YosysNetwork : public sta::ConcreteNetwork, public Netlist::LeafCellModel {
 public:
 	using sta::ConcreteNetwork::name;
 	using sta::ConcreteNetwork::cell;

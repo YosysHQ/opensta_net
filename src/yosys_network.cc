@@ -126,15 +126,15 @@ std::string detail::netKey(const Yosys::NetView &netlist, const Netlist::Net *ne
 
 bool detail::NameClaim::operator<(const NameClaim &other) const
 {
-	return std::tie(alias, wire, index) < std::tie(other.alias, other.wire, other.index);
+	return std::tie(kind, wire, index) < std::tie(other.kind, other.wire, other.index);
 }
 
 detail::NameClaim detail::netClaim(const Yosys::NetView &netlist, Netlist::Net *net)
 {
 	if (net->constant != Netlist::Net::Const::None)
-		return {net, false, "", int(net->constant)};
+		return {net, ClaimKind::Canonical, "", int(net->constant)};
 	Netlist::NetName name = netlist.wireName(net);
-	return {net, false, name.wire, name.index};
+	return {net, ClaimKind::Canonical, name.wire, name.index};
 }
 
 void detail::addClaim(NetNames &names, const std::string &name, const NameClaim &claim)
@@ -154,7 +154,7 @@ size_t detail::scopeNetNames(const Yosys::NetView &netlist, const Netlist::Insta
 		detail::addClaim(names, name, detail::netClaim(netlist, net));
 	}
 	for (const Netlist::NetAlias &alias : netlist.aliases(scope)) {
-		NameClaim claim = {alias.net, true, alias.name.wire, alias.name.index};
+		NameClaim claim = {alias.net, ClaimKind::Alias, alias.name.wire, alias.name.index};
 		Netlist::NetName host = alias.name;
 		host.hdlpath.clear();
 		detail::addClaim(names, detail::staWireName(alias.name), claim);
@@ -198,7 +198,7 @@ void detail::scopeChildNames(const Netlist::Instance *scope, const std::vector<s
 
 void YosysNetwork::checkOwner(const YInstance *inst) const
 {
-	if (inst != nullptr && inst->netlist != netlist_)
+	if (inst != nullptr && inst->netlist != view_)
 		report_->error(2931, "a handle of an earlier network names no object, get the object again.");
 }
 
@@ -212,21 +212,24 @@ const YInstance *YosysNetwork::asInst(const sta::Instance *inst) const
 const YPin *YosysNetwork::asPin(const sta::Pin *pin) const
 {
 	const YPin *record = reinterpret_cast<const YPin *>(pin);
-	checkOwner(record != nullptr ? record->inst : nullptr);
+	if (record != nullptr)
+		checkOwner(record->inst);
 	return record;
 }
 
 const YNet *YosysNetwork::asNet(const sta::Net *net) const
 {
 	const YNet *record = reinterpret_cast<const YNet *>(net);
-	checkOwner(record != nullptr ? record->scope : nullptr);
+	if (record != nullptr)
+		checkOwner(record->scope);
 	return record;
 }
 
 const YTerm *YosysNetwork::asTerm(const sta::Term *term) const
 {
 	const YTerm *record = reinterpret_cast<const YTerm *>(term);
-	checkOwner(record != nullptr ? record->pin->inst : nullptr);
+	if (record != nullptr)
+		checkOwner(record->pin->inst);
 	return record;
 }
 
@@ -244,54 +247,54 @@ bool YosysNetwork::linked() const
 
 size_t YosysNetwork::takeSharedNames()
 {
-	return std::exchange(shared_names_, 0);
+	return std::exchange(shared_name_count_, 0);
 }
 
-void YosysNetwork::setLocked(bool on)
+void YosysNetwork::setEpochPhase(EpochPhase phase)
 {
-	locked_ = on;
+	epoch_phase_ = phase;
 }
 
-bool YosysNetwork::locked() const
+bool YosysNetwork::epochClosed() const
 {
-	return locked_;
+	return epoch_phase_ == EpochPhase::Closed;
 }
 
-void YosysNetwork::setBeforeCheck(void (*hook)())
+void YosysNetwork::setOpenEpochHook(void (*hook)())
 {
-	before_check_ = hook;
+	open_epoch_hook_ = hook;
 }
 
 bool YosysNetwork::isLeaf(const sta::Pin *pin) const
 {
-	return tokens_ != nullptr || sta::Network::isLeaf(pin);
+	return token_sink_ != nullptr || sta::Network::isLeaf(pin);
 }
 
-void YosysNetwork::setTokens(std::vector<Token> *tokens)
+void YosysNetwork::setTokenSink(std::vector<Token> *sink)
 {
-	tokens_ = tokens;
+	token_sink_ = sink;
 	token_index_.clear();
 }
 
 // one stable token per object, write_sdc sorts by name
 std::string YosysNetwork::token(Token::ObjectKind kind, const void *object) const
 {
-	auto [it, fresh] = token_index_.try_emplace(object, tokens_->size());
+	auto [it, fresh] = token_index_.try_emplace(object, token_sink_->size());
 	if (fresh)
-		tokens_->push_back({kind, object});
+		token_sink_->push_back({kind, object});
 	return std::string(detail::token_prefix) + std::to_string(it->second);
 }
 
 std::string YosysNetwork::pathName(const sta::Instance *instance) const
 {
-	if (tokens_ != nullptr && instance != topInstance())
+	if (token_sink_ != nullptr && instance != topInstance())
 		return token(Token::ObjectKind::Cell, instance);
 	return sta::Network::pathName(instance);
 }
 
 std::string YosysNetwork::pathName(const sta::Pin *pin) const
 {
-	if (tokens_ != nullptr)
+	if (token_sink_ != nullptr)
 		return token(Token::ObjectKind::Pin, pin);
 	return sta::Network::pathName(pin);
 }
@@ -299,27 +302,27 @@ std::string YosysNetwork::pathName(const sta::Pin *pin) const
 // write_sdc writes top ports by name
 std::string YosysNetwork::name(const sta::Port *port) const
 {
-	if (tokens_ != nullptr && cell(port) == reinterpret_cast<sta::Cell *>(top_cell_))
+	if (token_sink_ != nullptr && cell(port) == reinterpret_cast<sta::Cell *>(top_cell_))
 		return token(Token::ObjectKind::Port, port);
 	return sta::ConcreteNetwork::name(port);
 }
 
 std::string YosysNetwork::pathName(const sta::Net *net) const
 {
-	if (tokens_ != nullptr)
+	if (token_sink_ != nullptr)
 		return token(Token::ObjectKind::Net, net);
 	return sta::Network::pathName(net);
 }
 
 bool YosysNetwork::isLinked() const
 {
-	before_check_();
-	return linked() && !locked_ && netlist_->valid();
+	open_epoch_hook_();
+	return linked() && epoch_phase_ == EpochPhase::Open && view_->valid();
 }
 
-void YosysNetwork::attach(Yosys::NetView *netlist)
+void YosysNetwork::attach(Yosys::NetView *view)
 {
-	netlist_ = netlist;
+	view_ = view;
 	// Named as OpenSTA's verilog reader library
 	if (design_lib_ == nullptr)
 		design_lib_ = makeLibrary("verilog", "");
@@ -327,8 +330,8 @@ void YosysNetwork::attach(Yosys::NetView *netlist)
 
 void YosysNetwork::link()
 {
-	YInstance *top = netlist_->top();
-	top_cell_ = makeShapedCell(top->master, false, *top->ports);
+	YInstance *top = view_->top();
+	top_cell_ = makeShapedCell(top->master, StaCellKind::Hierarchical, *top->ports);
 	inst_cells_[top->id] = top_cell_;
 	inst_names_[top->id] = top->name;
 	indexPins(top);
@@ -411,7 +414,7 @@ void YosysNetwork::buildTables(YInstance *scope)
 		}
 		indexPins(child);
 	}
-	shared_names_ += detail::scopeNetNames(*netlist_, scope, net_names_[scope->id]);
+	shared_name_count_ += detail::scopeNetNames(*view_, scope, net_names_[scope->id]);
 }
 
 sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope)
@@ -421,7 +424,7 @@ sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope)
 		key += "\n" + scopeBody(scope);
 	auto [it, fresh] = scope_cells_.try_emplace(key, nullptr);
 	if (fresh)
-		it->second = makeShapedCell(freeCellName(scope), false, *scope->ports);
+		it->second = makeShapedCell(freeCellName(scope), StaCellKind::Hierarchical, *scope->ports);
 	return it->second;
 }
 
@@ -434,10 +437,10 @@ std::string YosysNetwork::scopeBody(const YInstance *scope) const
 		const YNet *inner = nullptr;
 		if (pin->term != nullptr)
 			inner = pin->term->net;
-		lines.push_back("T " + detail::pinKey(*netlist_, pin) + " " + detail::netKey(*netlist_, inner));
+		lines.push_back("T " + detail::pinKey(*view_, pin) + " " + detail::netKey(*view_, inner));
 	}
-	for (const YNet *net : netlist_->nets(scope))
-		lines.push_back("N " + detail::staNetName(*netlist_, net));
+	for (const YNet *net : view_->nets(scope))
+		lines.push_back("N " + detail::staNetName(*view_, net));
 	for (const YInstance *child : scope->children)
 		childLines(child, lines);
 	std::sort(lines.begin(), lines.end());
@@ -453,8 +456,8 @@ void YosysNetwork::childLines(const YInstance *child, std::vector<std::string> &
 	std::string child_name = instName(child);
 	lines.push_back("C " + child_name + " " + name(reinterpret_cast<sta::Cell *>(inst_cells_.get(child->id))));
 	for (const YPin *pin : child->pins) {
-		std::string net = detail::netKey(*netlist_, pin->net);
-		lines.push_back("c " + child_name + " " + detail::pinKey(*netlist_, pin) + " " + net);
+		std::string net = detail::netKey(*view_, pin->net);
+		lines.push_back("c " + child_name + " " + detail::pinKey(*view_, pin) + " " + net);
 	}
 }
 
@@ -481,14 +484,16 @@ void YosysNetwork::countMasters(const YInstance *scope)
 sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const
 {
 	sta::ConcreteCell *ccell = inst_cells_.get(pin->inst->id);
-	const std::string &raw = netlist_->shape(pin).name;
-	std::string port_name = ccell->libertyCell() != nullptr ? raw : detail::staName(raw);
+	const std::string &raw = view_->shape(pin).name;
+	std::string port_name = raw;
+	if (ccell->libertyCell() == nullptr)
+		port_name = detail::staName(raw);
 	sta::Port *port = reinterpret_cast<sta::Port *>(ccell->findPort(port_name));
 	if (port == nullptr)
 		report_->error(2903, "port {} missing on {}.", raw, name(reinterpret_cast<sta::Cell *>(ccell)));
 	if (!hasMembers(port))
 		return reinterpret_cast<sta::ConcretePort *>(port);
-	sta::Port *bit = findBusBit(port, netlist_->hdlIndex(pin));
+	sta::Port *bit = findBusBit(port, view_->hdlIndex(pin));
 	if (bit == nullptr)
 		report_->error(2916, "bus bit {} out of range on port {}.", pin->bit, name(port));
 	return reinterpret_cast<sta::ConcretePort *>(bit);
@@ -517,14 +522,14 @@ sta::ConcreteCell *YosysNetwork::typeCell(const YInstance &inst)
 	if (lcell != nullptr)
 		ccell = reinterpret_cast<sta::ConcreteCell *>(cell(lcell));
 	else
-		ccell = makeShapedCell(inst.type, true, *inst.ports);
+		ccell = makeShapedCell(inst.type, StaCellKind::Leaf, *inst.ports);
 	type_cells_[inst.type] = ccell;
 	return ccell;
 }
 
-sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bool leaf, const std::vector<Netlist::PortShape> &shapes)
+sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, StaCellKind kind, const std::vector<Netlist::PortShape> &shapes)
 {
-	sta::Cell *scell = makeCell(design_lib_, cell_name, leaf, "");
+	sta::Cell *scell = makeCell(design_lib_, cell_name, kind == StaCellKind::Leaf, "");
 	for (const Netlist::PortShape &shape : shapes) {
 		std::string port_name = detail::staName(shape.name);
 		sta::Port *port;
@@ -541,7 +546,7 @@ sta::Instance *YosysNetwork::topInstance() const
 {
 	if (!linked())
 		return nullptr;
-	return reinterpret_cast<sta::Instance *>(netlist_->top());
+	return reinterpret_cast<sta::Instance *>(view_->top());
 }
 
 std::string YosysNetwork::name(const sta::Instance *instance) const
@@ -628,7 +633,7 @@ sta::InstanceNetIterator *YosysNetwork::netIterator(const sta::Instance *instanc
 {
 	std::vector<YNet *> nets;
 	for (const auto &[name, claim] : net_names_.get(asInst(instance)->id)) {
-		if (!claim.alias)
+		if (claim.kind == detail::ClaimKind::Canonical)
 			nets.push_back(claim.net);
 	}
 	return detail::castIterator<sta::Net *>(nets);
@@ -691,7 +696,7 @@ sta::Pin *YosysNetwork::pin(const sta::Term *term) const
 
 std::string YosysNetwork::name(const sta::Net *net) const
 {
-	return detail::staNetName(*netlist_, asNet(net));
+	return detail::staNetName(*view_, asNet(net));
 }
 
 ObjectId YosysNetwork::id(const sta::Net *net) const
@@ -754,9 +759,9 @@ sta::ConstantPinIterator *YosysNetwork::constantPinIterator()
 {
 	sta::NetSet zero_nets(this);
 	sta::NetSet one_nets(this);
-	for (YNet *net : netlist_->constNets(Netlist::Net::Const::Zero))
+	for (YNet *net : view_->constNets(Netlist::Net::Const::Zero))
 		zero_nets.insert(reinterpret_cast<sta::Net *>(net));
-	for (YNet *net : netlist_->constNets(Netlist::Net::Const::One))
+	for (YNet *net : view_->constNets(Netlist::Net::Const::One))
 		one_nets.insert(reinterpret_cast<sta::Net *>(net));
 	return new sta::NetworkConstantPinIterator(this, zero_nets, one_nets);
 }

@@ -36,11 +36,16 @@ void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 std::string pinKey(const Yosys::NetView &netlist, const Netlist::Pin *pin);
 std::string netKey(const Yosys::NetView &netlist, const Netlist::Net *net);
 
+enum class ClaimKind : uint8_t {
+	Canonical,
+	Alias
+};
+
 // Claim of an STA net name by the source bit that gives it. Canonical names
 // beat aliases, then the smallest bit wins
 struct NameClaim {
 	Netlist::Net *net = nullptr;
-	bool alias = false;
+	ClaimKind kind = ClaimKind::Canonical;
 	std::string wire;
 	int index = 0;
 	bool operator<(const NameClaim &other) const;
@@ -67,6 +72,16 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 } // namespace detail
 
+enum class EpochPhase : uint8_t {
+	Open,
+	Closed
+};
+
+enum class StaCellKind : uint8_t {
+	Leaf,
+	Hierarchical
+};
+
 // a Port token holds the sta::Port, not its pin
 struct Token {
 	using ObjectKind = Yosys::TrackedRef::ObjectKind;
@@ -80,7 +95,7 @@ public:
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
 
-	void attach(Yosys::NetView *netlist);
+	void attach(Yosys::NetView *view);
 	void link();
 	void unlink();
 	bool linked() const;
@@ -92,9 +107,9 @@ public:
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
-	void setLocked(bool on);
-	bool locked() const;
-	void setBeforeCheck(void (*hook)());
+	void setEpochPhase(EpochPhase phase);
+	bool epochClosed() const;
+	void setOpenEpochHook(void (*hook)());
 
 	// Instance
 	sta::Instance *topInstance() const override;
@@ -111,7 +126,7 @@ public:
 	std::string pathName(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
-	void setTokens(std::vector<Token> *tokens);
+	void setTokenSink(std::vector<Token> *sink);
 	std::string token(Token::ObjectKind kind, const void *object) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
@@ -158,7 +173,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::PortShape> &shapes);
+	sta::ConcreteCell *makeShapedCell(const std::string &name, StaCellKind kind, const std::vector<Netlist::PortShape> &shapes);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
@@ -173,14 +188,15 @@ private:
 	const YPin *asPin(const sta::Pin *pin) const;
 	const YNet *asNet(const sta::Net *net) const;
 	const YTerm *asTerm(const sta::Term *term) const;
-	Yosys::NetView *netlist_ = nullptr;
+private:
+	Yosys::NetView *view_ = nullptr;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
-	bool locked_ = false;
-	size_t shared_names_ = 0; // nets with the canonical name of another net
-	std::vector<Token> *tokens_ = nullptr;
+	EpochPhase epoch_phase_ = EpochPhase::Open;
+	size_t shared_name_count_ = 0; // nets with the canonical name of another net
+	std::vector<Token> *token_sink_ = nullptr; // token mode when set
 	mutable std::unordered_map<const void *, size_t> token_index_;
-	void (*before_check_)() = nullptr;
+	void (*open_epoch_hook_)() = nullptr;
 
 	// Cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;

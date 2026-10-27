@@ -45,7 +45,7 @@ void YosysSta::makeReport()
 void YosysSta::makeNetwork()
 {
 	yosys_network = new ysta::YosysNetwork;
-	yosys_network->setBeforeCheck(openEpoch);
+	yosys_network->setOpenEpochHook(openEpoch);
 	network_ = yosys_network;
 }
 
@@ -151,14 +151,14 @@ void EpochPass::execute(std::vector<std::string> args, Design *design)
 	closeEpoch();
 	inner->execute(std::move(args), design);
 	// A plugin load adds passes
-	if (pass_register.size() != the_sta->wrapped_passes)
+	if (pass_register.size() != the_sta->sync.wrapped_pass_count)
 		wrapPasses();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	the_sta->view->invalidateCheck();
-	if (the_sta->autosync && yosys_design != nullptr)
+	the_sta->views.view->invalidateCheck();
+	if (the_sta->sync.autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
 }
@@ -218,7 +218,7 @@ void wrapPasses()
 	for (Pass *pass : passes)
 		new EpochPass(pass);
 	Pass::init_register();
-	the_sta->wrapped_passes = pass_register.size();
+	the_sta->sync.wrapped_pass_count = pass_register.size();
 }
 
 void bootSta()
@@ -232,7 +232,7 @@ void bootSta()
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 
-size_t parseOptions(const std::vector<std::string> &args, Options &opt)
+size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 {
 	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
 	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
@@ -255,14 +255,14 @@ size_t parseOptions(const std::vector<std::string> &args, Options &opt)
 	return argidx;
 }
 
-void linkOrSync(Design *design, const Options &opt)
+void linkOrSync(Design *design, const PassOptions &opt)
 {
 	if (opt.link) {
 		linkDesign(design);
 		return;
 	}
 	// Passes may have run since the last call
-	the_sta->view->invalidateCheck();
+	the_sta->views.view->invalidateCheck();
 	if (!opt.sync && needsSync())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
@@ -285,10 +285,10 @@ void readLiberty(const std::string &file)
 		log_cmd_error("OpenSTA: failed to read liberty file %s.\n", file.c_str());
 }
 
-bool sourceFile(const std::string &file, bool sdc)
+bool sourceFile(const std::string &file, SourceKind kind)
 {
 	std::string quoted = "{" + file + "}";
-	if (sdc)
+	if (kind == SourceKind::Sdc)
 		return tclEval("read_sdc " + quoted);
 	return tclEval("namespace eval ::sta {include_file " + quoted + " 0 0}");
 }
@@ -318,15 +318,15 @@ void evalTcl(const std::string &cmd)
 }
 
 // the sync after -unprotect applies the constraints by the anchors only
-void setProtection(Design *design, const Options &opt)
+void setProtection(Design *design, const PassOptions &opt)
 {
 	if (opt.protect)
-		the_sta->protection = Protection::Barriers;
+		the_sta->epoch.protection = Protection::Barriers;
 	if (!opt.unprotect)
 		return;
-	the_sta->protection = Protection::AnchorsOnly;
-	the_sta->yosys_network->setLocked(false);
-	the_sta->view->unprotect(design);
+	the_sta->epoch.protection = Protection::AnchorsOnly;
+	the_sta->yosys_network->setEpochPhase(ysta::EpochPhase::Open);
+	the_sta->views.view->unprotect(design);
 	syncView(design);
 }
 
@@ -380,20 +380,20 @@ void OpenstaNetPass::help()
 void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 {
 	log_header(design, "Executing OPENSTA_NET pass.\n");
-	Options opt;
+	PassOptions opt;
 	size_t argidx = parseOptions(args, opt);
 	extra_args(args, argidx, design);
 
 	bootSta();
 	if (opt.autosync)
-		the_sta->autosync = true;
+		the_sta->sync.autosync = true;
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
 	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
-		checkSourced(sourceFile(opt.sdc_file, true), opt.sdc_file);
+		checkSourced(sourceFile(opt.sdc_file, SourceKind::Sdc), opt.sdc_file);
 	if (!opt.source_file.empty())
-		checkSourced(sourceFile(opt.source_file, false), opt.source_file);
+		checkSourced(sourceFile(opt.source_file, SourceKind::Tcl), opt.source_file);
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
 	setProtection(design, opt);

@@ -47,17 +47,29 @@ struct EpochPass : public Yosys::Pass {
 };
 
 struct YosysSta : public sta::Sta {
+	struct ViewOwner {
+		std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
+		std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
+	};
+
+	struct EpochState {
+		EpochConstraints constraints;
+		std::vector<ysta::Token> tokens;
+		Yosys::Protection protection = Yosys::Protection::Barriers; // until -unprotect
+	};
+
+	struct SyncState {
+		bool autosync = false;
+		bool running = false;
+		bool rebuild_pending = false;
+		std::string last_unbuildable_reason;
+		size_t wrapped_pass_count = 0;
+	};
+
 	ysta::YosysNetwork *yosys_network = nullptr;
-	std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
-	std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
-	bool autosync = false;
-	bool syncing = false;
-	size_t wrapped_passes = 0;
-	Constraints constraints;
-	std::vector<ysta::Token> tokens;
-	bool rebuild_pending = false;
-	std::string unbuildable_reason;
-	Yosys::Protection protection = Yosys::Protection::Barriers; // until -unprotect
+	ViewOwner views;
+	EpochState epoch;
+	SyncState sync;
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -72,9 +84,14 @@ public:
 	void makePortPin(const char *port_name, sta::PortDirection *dir) override;
 };
 
-struct Options {
+struct PassOptions {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
 	bool link = false, sync = false, autosync = false, protect = false, unprotect = false;
+};
+
+enum class SourceKind : uint8_t {
+	Sdc,
+	Tcl
 };
 
 // Tcl
@@ -82,14 +99,14 @@ bool tclEval(const std::string &script);
 
 // epoch.cc: epoch end, rebuild, link
 bool writeModeSdc(const std::string &mode, std::string &text);
-bool writeAllModes(ModeTexts &result);
-bool injectConstraints();
+bool writeAllModes(SdcTextByMode &result);
+bool captureEpochConstraints();
 void closeEpoch();
 void openEpoch();
 bool needsSync();
 bool canBuild(Design *design);
 void syncView(Design *design);
-void rebuild(Design *design);
+void rebuildAndReapply(Design *design);
 void warnDroppedParasitics();
 void warnSharedNames();
 void dropView();
@@ -109,14 +126,14 @@ void wrapPasses();
 void bootSta();
 
 // opensta_net
-size_t parseOptions(const std::vector<std::string> &args, Options &opt);
-void linkOrSync(Design *design, const Options &opt);
+size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
+void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
-bool sourceFile(const std::string &file, bool sdc);
+bool sourceFile(const std::string &file, SourceKind kind);
 void checkSourced(bool ok, const std::string &file);
 std::string unquote(const std::string &arg);
 void evalTcl(const std::string &cmd);
-void setProtection(Design *design, const Options &opt);
+void setProtection(Design *design, const PassOptions &opt);
 
 struct OpenstaNetPass : public Yosys::Pass {
 	OpenstaNetPass();

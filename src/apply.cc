@@ -8,21 +8,24 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
-int applyConstraints()
+int resolveAndApply()
 {
-	Constraints &constraints = the_sta->constraints;
+	EpochConstraints &constraints = the_sta->epoch.constraints;
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	for (Ref &ref : constraints.refs) {
-		ref.request.top_port_pin = ref.kind == Ref::ObjectKind::Port ? network->findPin(network->topInstance(), ref.name) : nullptr;
-		ref.plain = false;
-		ref.use.clear();
+	for (SdcObjectRef &ref : constraints.refs) {
+		ref.request.top_port_pin = nullptr;
+		if (ref.kind == SdcObjectRef::ObjectKind::Port)
+			ref.request.top_port_pin = network->findPin(network->topInstance(), ref.name);
+		ref.used_outside_through = false;
+		ref.use_objects.clear();
+		ref.inside_handled = false;
 	}
-	the_sta->view->resolve(constraints.view_refs);
+	the_sta->views.view->resolve(constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
 	tclEval("set ::ysta::script [info script]; info script {}");
 	int lost = 0;
-	for (const Command &command : the_sta->constraints.commands) {
+	for (const SdcCommand &command : constraints.commands) {
 		the_sta->setCmdMode(command.mode);
 		std::string reason;
 		if (applyCommand(command, reason))
@@ -37,15 +40,17 @@ int applyConstraints()
 	return lost;
 }
 
-bool applyCommand(const Command &command, std::string &reason)
+bool applyCommand(const SdcCommand &command, std::string &reason)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
 	int empty_getters = 0;
 	applyClockImages(command.words);
-	std::string script = command.words.empty() ? command.text : render(command.words, empty_getters, false);
+	std::string script = command.text;
+	if (!command.words.empty())
+		script = renderWords(command.words, empty_getters, ThroughContext::OutsideThrough);
 	std::string missing = missingNames(command.words);
-	std::string moved = movedInside(command.words);
+	std::string moved = namesMovedInside(command.words);
 	// an empty getter would widen a path exception
 	if (empty_getters > 0) {
 		reason = "no object found for " + missing;
@@ -71,9 +76,9 @@ bool applyCommand(const Command &command, std::string &reason)
 	return keptMeaning(command.words, moved, reason);
 }
 
-bool keptMeaning(const std::vector<Word> &words, const std::string &moved, std::string &reason)
+bool keptMeaning(const std::vector<SdcWord> &words, const std::string &moved, std::string &reason)
 {
-	if (anyUnprotected(words)) {
+	if (anyMovedToDrivers(words)) {
 		reason = "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
 		return false;
 	}
@@ -84,54 +89,62 @@ bool keptMeaning(const std::vector<Word> &words, const std::string &moved, std::
 	return true;
 }
 
+void appendName(std::string &names, const std::string &name)
+{
+	if (!names.empty())
+		names += " ";
+	names += name;
+}
+
 // refs that flatten moved inside, a -through or a clock on an input pin keeps its meaning
-std::string movedInside(const std::vector<Word> &words)
+std::string namesMovedInside(const std::vector<SdcWord> &words)
 {
 	bool clock = !words.empty() && isClockCommand(words[0].text);
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
-		const Ref &ref = the_sta->constraints.refs[index];
-		if (ref.result.found_as_leaf_pins && ref.plain && !(clock && ref.facts.hier_dir == Netlist::Dir::Input))
-			names += (names.empty() ? "" : " ") + ref.name;
+		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+		bool clock_input = clock && ref.facts.hier_dir == Netlist::Dir::Input;
+		if (ref.stillAsLeafPins() && ref.used_outside_through && !clock_input)
+			appendName(names, ref.name);
 	}
 	return names;
 }
 
-bool anyUnprotected(const std::vector<Word> &words)
+bool anyMovedToDrivers(const std::vector<SdcWord> &words)
 {
 	for (uint32_t index : refsOf(words)) {
-		if (the_sta->constraints.refs[index].facts.moved_to_drivers)
+		if (the_sta->epoch.constraints.refs[index].facts.moved_to_drivers)
 			return true;
 	}
 	return false;
 }
 
-bool foundAny(const std::vector<Word> &words)
+bool foundAny(const std::vector<SdcWord> &words)
 {
 	for (uint32_t index : refsOf(words)) {
-		if (!the_sta->constraints.refs[index].objects.empty())
+		if (!the_sta->epoch.constraints.refs[index].objects.empty())
 			return true;
 	}
 	return false;
 }
 
 // a getter of image pins only, opensta ignores their clock attributes
-bool onlyImages(const Word &word)
+bool onlyImagePins(const SdcWord &word)
 {
 	for (uint32_t index : word.refs) {
-		if (!the_sta->constraints.refs[index].facts.is_image_pin)
+		if (!the_sta->epoch.constraints.refs[index].facts.is_image_pin)
 			return false;
 	}
 	return true;
 }
 
-std::string missingNames(const std::vector<Word> &words)
+std::string missingNames(const std::vector<SdcWord> &words)
 {
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
-		const Ref &ref = the_sta->constraints.refs[index];
+		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
 		if (ref.objects.empty() && !ref.facts.is_image_pin)
-			names += (names.empty() ? "" : " ") + ref.name;
+			appendName(names, ref.name);
 	}
 	return names;
 }

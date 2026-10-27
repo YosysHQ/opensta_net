@@ -69,8 +69,8 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 // a Port token holds the sta::Port, not its pin
 struct Token {
-	using Kind = Yosys::NetView::Found::Kind;
-	Kind kind;
+	using ObjectKind = Yosys::TrackedRef::ObjectKind;
+	ObjectKind kind;
 	const void *object;
 };
 
@@ -112,7 +112,7 @@ public:
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
 	void setTokens(std::vector<Token> *tokens);
-	std::string token(Token::Kind kind, const void *object) const;
+	std::string token(Token::ObjectKind kind, const void *object) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, const sta::Port *port) const override;

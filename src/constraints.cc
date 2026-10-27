@@ -59,7 +59,7 @@ void parseGetter(const std::string &inner, Word &word)
 {
 	Constraints &constraints = the_sta->constraints;
 	for (auto [kind, object] : tokensIn(inner)) {
-		if (kind == Ref::Kind::Port) {
+		if (kind == Ref::ObjectKind::Port) {
 			ysta::YosysNetwork *network = the_sta->yosys_network;
 			object = network->findPin(network->topInstance(), static_cast<const sta::Port *>(object));
 		}
@@ -109,19 +109,19 @@ std::string untoken(const std::string &text)
 	return out + text.substr(at);
 }
 
-std::string objectName(Ref::Kind kind, const void *object)
+std::string objectName(Ref::ObjectKind kind, const void *object)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	if (kind == Ref::Kind::Pin || kind == Ref::Kind::Port)
+	if (kind == Ref::ObjectKind::Pin || kind == Ref::ObjectKind::Port)
 		return network->pathName(static_cast<const sta::Pin *>(object));
-	if (kind == Ref::Kind::Cell)
+	if (kind == Ref::ObjectKind::Cell)
 		return network->pathName(static_cast<const sta::Instance *>(object));
 	return network->pathName(static_cast<const sta::Net *>(object));
 }
 
 std::string tokenName(const ysta::Token &token)
 {
-	if (token.kind != Ref::Kind::Port)
+	if (token.kind != Ref::ObjectKind::Port)
 		return objectName(token.kind, token.object);
 	return the_sta->yosys_network->sta::ConcreteNetwork::name(static_cast<const sta::Port *>(token.object));
 }
@@ -137,7 +137,7 @@ std::vector<uint32_t> refsOf(const std::vector<Word> &words)
 	return refs;
 }
 
-std::string handleOf(Ref::Kind kind, const void *object)
+std::string handleOf(Ref::ObjectKind kind, const void *object)
 {
 	static const char hex[] = "0123456789abcdef";
 	unsigned char bytes[sizeof(void *)];
@@ -149,11 +149,11 @@ std::string handleOf(Ref::Kind kind, const void *object)
 	}
 	const sta::Network *network = the_sta->sdcNetwork();
 	std::string name, getter;
-	if (kind == Ref::Kind::Pin) {
+	if (kind == Ref::ObjectKind::Pin) {
 		handle += "_p_Pin";
 		name = network->pathName(static_cast<const sta::Pin *>(object));
 		getter = "get_pins";
-	} else if (kind == Ref::Kind::Cell) {
+	} else if (kind == Ref::ObjectKind::Cell) {
 		handle += "_p_Instance";
 		name = network->pathName(static_cast<const sta::Instance *>(object));
 		getter = "get_cells";
@@ -178,15 +178,15 @@ bool isThroughFlag(const std::string &word)
 std::string refHandles(Ref &ref, bool after_through)
 {
 	// a -through net that flatten grew takes its pins in the old scope
-	bool use_through = !ref.through_pins.empty() && after_through;
+	bool use_through = !ref.result.through_pins.empty() && after_through;
 	ref.plain = ref.plain || !after_through;
-	Ref::Kind kind = use_through ? Ref::Kind::Pin : ref.kind;
-	const std::vector<const void *> *objects = use_through ? &ref.through_pins : &ref.objects;
+	Ref::ObjectKind kind = use_through ? Ref::ObjectKind::Pin : ref.kind;
+	const std::vector<const void *> *objects = use_through ? &ref.result.through_pins : &ref.objects;
 	if (!use_through && !ref.use.empty())
 		objects = &ref.use;
 	std::string handles;
 	for (const void *object : *objects) {
-		if (kind == Ref::Kind::Port)
+		if (kind == Ref::ObjectKind::Port)
 			handles += " [get_ports " + tclQuoted(objectName(kind, object)) + "]";
 		else
 			handles += " " + handleOf(kind, object);
@@ -194,10 +194,10 @@ std::string refHandles(Ref &ref, bool after_through)
 	return handles;
 }
 
-void markRefs(const std::vector<Word> &words, bool Ref::*flag)
+void markRefs(const std::vector<Word> &words, bool Ref::Request::*flag)
 {
 	for (uint32_t index : refsOf(words))
-		the_sta->constraints.refs[index].*flag = true;
+		the_sta->constraints.refs[index].request.*flag = true;
 }
 
 std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through)
@@ -247,14 +247,11 @@ bool injectConstraints()
 			command.text = text;
 			parseWords(text, command.words);
 			if (isClockCommand(commandName(text)))
-				markRefs(command.words, &Ref::image);
+				markRefs(command.words, &Ref::Request::wants_image);
 			command.log_text = untoken(text);
 		}
 	}
-	if (the_sta->protect)
-		the_sta->view->protect(the_sta->constraints.view_refs);
-	else
-		the_sta->view->anchor(the_sta->constraints.view_refs);
+	the_sta->view->closeEpoch(the_sta->constraints.view_refs, the_sta->protection);
 	return journaled;
 }
 
@@ -290,7 +287,7 @@ std::string movedInside(const std::vector<Word> &words)
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const Ref &ref = the_sta->constraints.refs[index];
-		if (ref.inside && ref.plain && !(clock && ref.hier == Netlist::Dir::Input))
+		if (ref.result.found_as_leaf_pins && ref.plain && !(clock && ref.facts.hier_dir == Netlist::Dir::Input))
 			names += (names.empty() ? "" : " ") + ref.name;
 	}
 	return names;
@@ -299,7 +296,7 @@ std::string movedInside(const std::vector<Word> &words)
 bool anyUnprotected(const std::vector<Word> &words)
 {
 	for (uint32_t index : refsOf(words)) {
-		if (the_sta->constraints.refs[index].unprotected)
+		if (the_sta->constraints.refs[index].facts.moved_to_drivers)
 			return true;
 	}
 	return false;
@@ -318,7 +315,7 @@ bool foundAny(const std::vector<Word> &words)
 bool onlyImages(const Word &word)
 {
 	for (uint32_t index : word.refs) {
-		if (!the_sta->constraints.refs[index].image_pin)
+		if (!the_sta->constraints.refs[index].facts.is_image_pin)
 			return false;
 	}
 	return true;
@@ -329,7 +326,7 @@ std::string missingNames(const std::vector<Word> &words)
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const Ref &ref = the_sta->constraints.refs[index];
-		if (ref.objects.empty() && !ref.image_pin)
+		if (ref.objects.empty() && !ref.facts.is_image_pin)
 			names += (names.empty() ? "" : " ") + ref.name;
 	}
 	return names;
@@ -417,32 +414,32 @@ void clockImages(const std::vector<Word> &words, ClockUse use)
 void clockImage(Ref &ref, ClockUse use, bool source)
 {
 	using Dir = Netlist::Dir;
-	if (use == ClockUse::Clock && ref.hier == Dir::Input && !source)
+	if (use == ClockUse::Clock && ref.facts.hier_dir == Dir::Input && !source)
 		ref.use = loadsInside(ref);
-	else if (!ref.inside)
+	else if (!ref.result.found_as_leaf_pins)
 		return;
-	else if (use == ClockUse::NetworkLatency && !ref.beyond.empty())
-		ref.use = ref.beyond;
-	else if (use != ClockUse::NetworkLatency && (ref.hier == Dir::Output || source) && !ref.image_a.empty())
-		ref.use = ref.image_a;
-	else if (use == ClockUse::SourceLatency && ref.hier == Dir::Input && !ref.image_y.empty())
-		ref.use = ref.image_y;
+	else if (use == ClockUse::NetworkLatency && !ref.result.loads_beyond.empty())
+		ref.use = ref.result.loads_beyond;
+	else if (use != ClockUse::NetworkLatency && (ref.facts.hier_dir == Dir::Output || source) && !ref.result.image_a_pins.empty())
+		ref.use = ref.result.image_a_pins;
+	else if (use == ClockUse::SourceLatency && ref.facts.hier_dir == Dir::Input && !ref.result.image_y_pins.empty())
+		ref.use = ref.result.image_y_pins;
 	else
 		return;
-	ref.inside = false;
+	ref.result.found_as_leaf_pins = false;
 }
 
 // with the y pins of the image
 std::vector<const void *> loadsInside(const Ref &ref)
 {
 	std::vector<const void *> loads;
-	if (ref.inside)
+	if (ref.result.found_as_leaf_pins)
 		loads = ref.objects;
 	else
 		addInnerLoads(ref.objects, loads);
 	if (loads.empty())
 		return ref.objects;
-	loads.insert(loads.end(), ref.image_y.begin(), ref.image_y.end());
+	loads.insert(loads.end(), ref.result.image_y_pins.begin(), ref.result.image_y_pins.end());
 	return loads;
 }
 
@@ -451,7 +448,7 @@ void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void
 	for (const void *object : pins) {
 		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
 		if (pin->term != nullptr)
-			the_sta->view->innerPins(pin->term->net, false, loads);
+			the_sta->view->innerPins(pin->term->net, WalkTarget::Loads, loads);
 	}
 }
 
@@ -466,7 +463,7 @@ int applyConstraints()
 	Constraints &constraints = the_sta->constraints;
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	for (Ref &ref : constraints.refs) {
-		ref.top_pin = ref.kind == Ref::Kind::Port ? network->findPin(network->topInstance(), ref.name) : nullptr;
+		ref.request.top_port_pin = ref.kind == Ref::ObjectKind::Port ? network->findPin(network->topInstance(), ref.name) : nullptr;
 		ref.plain = false;
 		ref.use.clear();
 	}

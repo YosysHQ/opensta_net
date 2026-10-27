@@ -531,10 +531,10 @@ void evalTcl(const std::string &cmd)
 void setProtection(Design *design, const Options &opt)
 {
 	if (opt.protect)
-		the_sta->protect = true;
+		the_sta->protection = Protection::Barriers;
 	if (!opt.unprotect)
 		return;
-	the_sta->protect = false;
+	the_sta->protection = Protection::AnchorsOnly;
 	the_sta->yosys_network->setLocked(false);
 	the_sta->view->unprotect(design);
 	syncView(design);

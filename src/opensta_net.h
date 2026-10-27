@@ -34,7 +34,7 @@ struct YosysStaReport : public sta::ReportTcl {
 
 using ModeTexts = Yosys::dict<std::string, std::string>;
 
-struct Ref : Yosys::NetView::Found {
+struct Ref : Yosys::TrackedRef {
 	std::string name;
 	bool plain = false;                 // used outside a -through
 	std::vector<const void *> use = {}; // objects of a clock use, else objects
@@ -63,7 +63,7 @@ struct Command {
 struct Constraints {
 	std::vector<Command> commands;
 	std::deque<Ref> refs;
-	std::vector<Yosys::NetView::Found *> view_refs;
+	std::vector<Yosys::TrackedRef *> view_refs;
 };
 
 // track pass starts
@@ -90,7 +90,7 @@ struct YosysSta : public sta::Sta {
 	std::vector<ysta::Token> tokens;
 	bool rebuild_pending = false;
 	std::string unbuildable_reason;
-	bool protect = true; // barriers at each epoch end, until -unprotect
+	Yosys::Protection protection = Yosys::Protection::Barriers; // until -unprotect
 public:
 	void makeReport() override;
 	void makeNetwork() override;
@@ -137,18 +137,18 @@ bool parseWords(const std::string &script, std::vector<Word> &words);
 void parseSubstitution(const std::string &inner, Word &word);
 void parseGetter(const std::string &inner, Word &word);
 std::vector<ysta::Token> tokensIn(const std::string &text);
-std::string objectName(Ref::Kind kind, const void *object);
+std::string objectName(Ref::ObjectKind kind, const void *object);
 std::string tokenName(const ysta::Token &token);
 void addJournal(ModeTexts &modes);
 std::string tclQuoted(const std::string &text);
 std::string untoken(const std::string &text);
 std::string commandName(const std::string &script);
 std::vector<uint32_t> refsOf(const std::vector<Word> &words);
-std::string handleOf(Ref::Kind kind, const void *object);
+std::string handleOf(Ref::ObjectKind kind, const void *object);
 std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through);
 bool isThroughFlag(const std::string &word);
 std::string refHandles(Ref &ref, bool after_through);
-void markRefs(const std::vector<Word> &words, bool Ref::*flag);
+void markRefs(const std::vector<Word> &words, bool Ref::Request::*flag);
 bool injectConstraints();
 bool isClockCommand(const std::string &name);
 std::string movedInside(const std::vector<Word> &words);

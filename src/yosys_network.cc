@@ -274,7 +274,7 @@ void YosysNetwork::setTokens(std::vector<Token> *tokens)
 }
 
 // one stable token per object, write_sdc sorts by name
-std::string YosysNetwork::token(Token::Kind kind, const void *object) const
+std::string YosysNetwork::token(Token::ObjectKind kind, const void *object) const
 {
 	auto [it, fresh] = token_index_.try_emplace(object, tokens_->size());
 	if (fresh)
@@ -285,14 +285,14 @@ std::string YosysNetwork::token(Token::Kind kind, const void *object) const
 std::string YosysNetwork::pathName(const sta::Instance *instance) const
 {
 	if (tokens_ != nullptr && instance != topInstance())
-		return token(Token::Kind::Cell, instance);
+		return token(Token::ObjectKind::Cell, instance);
 	return sta::Network::pathName(instance);
 }
 
 std::string YosysNetwork::pathName(const sta::Pin *pin) const
 {
 	if (tokens_ != nullptr)
-		return token(Token::Kind::Pin, pin);
+		return token(Token::ObjectKind::Pin, pin);
 	return sta::Network::pathName(pin);
 }
 
@@ -300,14 +300,14 @@ std::string YosysNetwork::pathName(const sta::Pin *pin) const
 std::string YosysNetwork::name(const sta::Port *port) const
 {
 	if (tokens_ != nullptr && cell(port) == reinterpret_cast<sta::Cell *>(top_cell_))
-		return token(Token::Kind::Port, port);
+		return token(Token::ObjectKind::Port, port);
 	return sta::ConcreteNetwork::name(port);
 }
 
 std::string YosysNetwork::pathName(const sta::Net *net) const
 {
 	if (tokens_ != nullptr)
-		return token(Token::Kind::Net, net);
+		return token(Token::ObjectKind::Net, net);
 	return sta::Network::pathName(net);
 }
 

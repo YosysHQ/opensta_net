@@ -11,6 +11,7 @@
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
 
+#include "constraints.h"
 #include "yosys_network.hh"
 
 namespace opensta_net {
@@ -30,40 +31,6 @@ struct NonConsoleTee {
 struct YosysStaReport : public sta::ReportTcl {
 	int warnings = 0;
 	size_t printString(const char *buffer, size_t length) override;
-};
-
-using ModeTexts = Yosys::dict<std::string, std::string>;
-
-struct Ref : Yosys::TrackedRef {
-	std::string name;
-	bool plain = false;                 // used outside a -through
-	std::vector<const void *> use = {}; // objects of a clock use, else objects
-};
-
-enum class ClockUse : uint8_t {
-	Clock,
-	SourceLatency,
-	NetworkLatency
-};
-
-struct Word {
-	std::string text;
-	std::vector<Word> nested_words;
-	std::vector<uint32_t> refs;
-	bool nested = false;
-};
-
-struct Command {
-	std::string mode;
-	std::string text; // with tokens
-	std::string log_text;
-	std::vector<Word> words;
-};
-
-struct Constraints {
-	std::vector<Command> commands;
-	std::deque<Ref> refs;
-	std::vector<Yosys::TrackedRef *> view_refs;
 };
 
 // track pass starts
@@ -112,60 +79,22 @@ struct Options {
 
 // Tcl
 bool tclEval(const std::string &script);
-std::string normalizeCommand(const std::string &cmd);
-std::vector<std::string> sdcCommands(const std::string &text);
 
-// Build
+// epoch.cc: epoch end, rebuild, link
+bool writeModeSdc(const std::string &mode, std::string &text);
+bool writeAllModes(ModeTexts &result);
+bool injectConstraints();
+void closeEpoch();
+void openEpoch();
+bool needsSync();
+bool canBuild(Design *design);
+void syncView(Design *design);
+void rebuild(Design *design);
+void warnDroppedParasitics();
 void warnSharedNames();
 void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);
-
-// Epochs
-bool writeModeSdc(const std::string &mode, std::string &text);
-bool writeAllModes(ModeTexts &result);
-void warnDroppedParasitics();
-bool canBuild(Design *design);
-bool needsSync();
-void rebuild(Design *design);
-void syncView(Design *design);
-void closeEpoch();
-void openEpoch();
-
-// Constraints
-bool parseWords(const std::string &script, std::vector<Word> &words);
-void parseSubstitution(const std::string &inner, Word &word);
-void parseGetter(const std::string &inner, Word &word);
-std::vector<ysta::Token> tokensIn(const std::string &text);
-std::string objectName(Ref::ObjectKind kind, const void *object);
-std::string tokenName(const ysta::Token &token);
-void addJournal(ModeTexts &modes);
-std::string tclQuoted(const std::string &text);
-std::string untoken(const std::string &text);
-std::string commandName(const std::string &script);
-std::vector<uint32_t> refsOf(const std::vector<Word> &words);
-std::string handleOf(Ref::ObjectKind kind, const void *object);
-std::string render(const std::vector<Word> &words, int &empty_getters, bool after_through);
-bool isThroughFlag(const std::string &word);
-std::string refHandles(Ref &ref, bool after_through);
-void markRefs(const std::vector<Word> &words, bool Ref::Request::*flag);
-bool injectConstraints();
-bool isClockCommand(const std::string &name);
-std::string movedInside(const std::vector<Word> &words);
-bool anyUnprotected(const std::vector<Word> &words);
-bool foundAny(const std::vector<Word> &words);
-bool onlyImages(const Word &word);
-std::string missingNames(const std::vector<Word> &words);
-int tclInt(const std::string &script);
-bool applyCommand(const Command &command, std::string &reason);
-bool keptMeaning(const std::vector<Word> &words, const std::string &moved, std::string &reason);
-bool hasFlag(const std::vector<Word> &words, const std::string &flag);
-void applyClockImages(const std::vector<Word> &words);
-void clockImages(const std::vector<Word> &words, ClockUse use);
-void clockImage(Ref &ref, ClockUse use, bool source);
-std::vector<const void *> loadsInside(const Ref &ref);
-void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads);
-int applyConstraints();
 
 // Tcl traces
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);

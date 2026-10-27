@@ -61,11 +61,13 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		return false;
 	}
 	int warnings = report->warnings;
+	int kept = tclInt("llength $::ysta::kept");
 	if (Tcl_EvalEx(interp, script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
 		reason = std::string("failed: ") + Tcl_GetStringResult(interp);
 		return false;
 	}
-	if (report->warnings != warnings) {
+	// a warning of a command that the trace keeps again loses nothing
+	if (report->warnings != warnings && tclInt("llength $::ysta::kept") == kept) {
 		reason = "applied with a warning";
 		return false;
 	}

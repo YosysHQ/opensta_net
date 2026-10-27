@@ -127,12 +127,12 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 		word.kind = WordKind::Getter;
 }
 
-void addJournal(SdcTextByMode &modes)
+void appendTraceTexts(SdcTextByMode &modes, const char *var)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	int count = 0;
 	Tcl_Obj **items = nullptr;
-	if (!tclEval("::ysta::texts ::ysta::journal") || Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &count, &items) != TCL_OK)
+	if (!tclEval(std::string("::ysta::texts ") + var) || Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &count, &items) != TCL_OK)
 		return;
 	for (int i = 0; i + 1 < count; i += 2)
 		modes[Tcl_GetString(items[i])] += Tcl_GetString(items[i + 1]);

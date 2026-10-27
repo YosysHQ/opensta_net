@@ -3,6 +3,7 @@
 // 2. each token becomes a ref, which anchors its rtlil objects
 // 3. passes carry the anchors
 // 4. the first query after a change opens the epoch: rebuild, then resolveAndApply
+// the trace keeps what write_sdc does not write and the commands since the epoch end (::ysta::note)
 #include "opensta_net.h"
 
 #include <fstream>
@@ -48,8 +49,10 @@ bool captureEpochConstraints()
 	epoch.tokens.clear();
 	the_sta->yosys_network->setTokenSink(&epoch.tokens);
 	bool written = writeAllModes(modes);
-	if (!written)
-		addJournal(modes);
+	const char *trace_var = "::ysta::journal";
+	if (written)
+		trace_var = "::ysta::kept";
+	appendTraceTexts(modes, trace_var);
 	the_sta->yosys_network->setTokenSink(nullptr);
 	if (written)
 		epoch.constraints = {};
@@ -143,6 +146,7 @@ void rebuildAndReapply(Design *design)
 		return;
 	}
 	the_sta->sync.rebuild_pending = false;
+	// the apply keeps the unwritten commands again
 	tclEval("::ysta::clear");
 	int lost = resolveAndApply();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);

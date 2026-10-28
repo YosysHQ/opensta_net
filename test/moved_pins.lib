@@ -1,0 +1,96 @@
+/* the yosys gates with unit arcs */
+library (moved_pins) {
+	delay_model : table_lookup;
+	time_unit : "1ns"; capacitive_load_unit (1,pf); voltage_unit : "1V"; current_unit : "1mA"; pulling_resistance_unit : "1kohm"; leakage_power_unit : "1nW";
+	input_threshold_pct_fall : 50; input_threshold_pct_rise : 50; output_threshold_pct_fall : 50; output_threshold_pct_rise : 50;
+	slew_lower_threshold_pct_fall : 20; slew_lower_threshold_pct_rise : 20; slew_upper_threshold_pct_fall : 80; slew_upper_threshold_pct_rise : 80;
+	nom_process : 1; nom_temperature : 25; nom_voltage : 1;
+	cell ("$_NOT_") { area : 1;
+		pin (A) { direction : input; capacitance : 0.001; }
+		pin (Y) { direction : output; function : "!A";
+			timing () { related_pin : "A";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_AND_") { area : 1;
+		pin (A) { direction : input; capacitance : 0.001; }
+		pin (B) { direction : input; capacitance : 0.001; }
+		pin (Y) { direction : output; function : "A&B";
+			timing () { related_pin : "A";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+			timing () { related_pin : "B";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_NAND_") { area : 1;
+		pin (A) { direction : input; capacitance : 0.001; }
+		pin (B) { direction : input; capacitance : 0.001; }
+		pin (Y) { direction : output; function : "!(A&B)";
+			timing () { related_pin : "A";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+			timing () { related_pin : "B";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_MUX_") { area : 1;
+		pin (A) { direction : input; capacitance : 0.001; }
+		pin (B) { direction : input; capacitance : 0.001; }
+		pin (S) { direction : input; capacitance : 0.001; }
+		pin (Y) { direction : output; function : "(A&!S)|(B&S)";
+			timing () { related_pin : "A";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+			timing () { related_pin : "B";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+			timing () { related_pin : "S";
+				cell_rise (scalar) { values ("0.1"); } cell_fall (scalar) { values ("0.1"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_DFF_P_") { area : 1;
+		ff (IQ, IQN) { clocked_on : "C"; next_state : "D";  }
+		pin (C) { direction : input; capacitance : 0.001; clock : true; }
+		pin (D) { direction : input; capacitance : 0.001;
+			timing () { related_pin : "C"; timing_type : setup_rising;
+				rise_constraint (scalar) { values ("0.05"); } fall_constraint (scalar) { values ("0.05"); } }
+		}
+		pin (Q) { direction : output; function : "IQ";
+			timing () { related_pin : "C"; timing_type : rising_edge;
+				cell_rise (scalar) { values ("0.2"); } cell_fall (scalar) { values ("0.2"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_DFFE_PP_") { area : 1;
+		ff (IQ, IQN) { clocked_on : "C"; next_state : "(D&E)|(IQ&!E)";  }
+		pin (C) { direction : input; capacitance : 0.001; clock : true; }
+		pin (D) { direction : input; capacitance : 0.001;
+			timing () { related_pin : "C"; timing_type : setup_rising;
+				rise_constraint (scalar) { values ("0.05"); } fall_constraint (scalar) { values ("0.05"); } }
+		}
+		pin (E) { direction : input; capacitance : 0.001; }
+		pin (Q) { direction : output; function : "IQ";
+			timing () { related_pin : "C"; timing_type : rising_edge;
+				cell_rise (scalar) { values ("0.2"); } cell_fall (scalar) { values ("0.2"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+	cell ("$_DFF_N_") { area : 1;
+		ff (IQ, IQN) { clocked_on : "!C"; next_state : "D";  }
+		pin (C) { direction : input; capacitance : 0.001; clock : true; }
+		pin (D) { direction : input; capacitance : 0.001;
+			timing () { related_pin : "C"; timing_type : setup_falling;
+				rise_constraint (scalar) { values ("0.05"); } fall_constraint (scalar) { values ("0.05"); } }
+		}
+		pin (Q) { direction : output; function : "IQ";
+			timing () { related_pin : "C"; timing_type : falling_edge;
+				cell_rise (scalar) { values ("0.2"); } cell_fall (scalar) { values ("0.2"); }
+				rise_transition (scalar) { values ("0.01"); } fall_transition (scalar) { values ("0.01"); } }
+		}
+	}
+}

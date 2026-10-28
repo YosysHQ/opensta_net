@@ -117,6 +117,7 @@ track track_flatten flatten 'EXIT 0|synced after design change, 0'
 track track_unprotect 'flatten;opensta_net -unprotect;select -assert-none t:$barrier' \
 	'EXIT 0|synced after design change, 0|synced after design change, 0'
 expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 0 ' '^SLACK 8.85$' '^CELLS 10$'
+expect hier_thru test/hier_thru.tcl 'synced after design change, 0 ' '^INSIDE 0$'
 expect unwritten test/unwritten.tcl 'synced after design change, 0 ' '^KEPT set_input_delay 1 -clock clk -network_latency_included \[get_ports \{in\}\]$' \
 	'^KEPT set_clock_gating_check -setup 0.5 \[get_clocks \{clk\}\]$' '^AFTER CELL PIN$' '^LIB LIB$' \
 	'@test/unwritten_out.sdc=^set_clock_uncertainty 0.7000 clk$' '@test/unwritten_out.sdc=^set_voltage -object_list n1 1.100$' '^SLACK 4\.15' \

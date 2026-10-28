@@ -13,6 +13,7 @@ void rewriteWords(std::vector<SdcWord> &words)
 	if (words.empty())
 		return;
 	disableWireEdges(words);
+	hierPinLoads(words);
 	applyClockImages(words);
 	quoteClocks(words);
 }
@@ -36,6 +37,22 @@ void disableWireEdges(std::vector<SdcWord> &words)
 		word.kind = WordKind::Plain;
 		word.text = "[::ysta::wire_edges [list" + handles + "]]";
 		ref.inside_handled = true;
+	}
+}
+
+// a removed hierarchical pin in a case value or a -through
+void hierPinLoads(std::vector<SdcWord> &words)
+{
+	bool all = words[0].text == "set_case_analysis";
+	for (size_t i = 1; i < words.size(); i++) {
+		if (!all && !isThroughFlag(words[i - 1].text))
+			continue;
+		for (uint32_t index : words[i].refs) {
+			SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+			if (ref.stillAsLeafPins() && ref.facts.hier_dir == Netlist::Dir::Output)
+				ref.use_objects = ref.result.loads_beyond;
+			ref.inside_handled = true;
+		}
 	}
 }
 

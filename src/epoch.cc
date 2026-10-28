@@ -59,19 +59,7 @@ bool captureEpochConstraints()
 		epoch.constraints = {};
 	bool journaled = written || tclInt("expr {$::ysta::untexted == 0}") == 1;
 	tclEval("set ::ysta::journal {}");
-	for (const auto &[mode, sdc] : modes) {
-		for (const std::string &text : sdcCommands(sdc)) {
-			if (commandName(text) == "current_design")
-				continue;
-			SdcCommand &command = epoch.constraints.commands.emplace_back();
-			command.mode = mode;
-			command.text = text;
-			parseWords(text, command.words);
-			if (isClockCommand(commandName(text)))
-				markRefs(command.words, &SdcObjectRef::Request::wants_image);
-			command.log_text = tokensToNames(text);
-		}
-	}
+	parseCommands(modes);
 	the_sta->views.view->closeEpoch(epoch.constraints.view_refs, epoch.protection);
 	return journaled;
 }
@@ -139,6 +127,10 @@ void syncView(Design *design)
 void rebuildAndReapply(Design *design)
 {
 	warnDroppedParasitics();
+	// the commands since the epoch end read no network object, else a sync ran before them
+	SdcTextByMode journal;
+	appendTraceTexts(journal, "::ysta::journal");
+	int untexted = tclInt("set ::ysta::untexted");
 	std::string error;
 	if (!linkView(design, error)) {
 		the_sta->sync.rebuild_pending = true;
@@ -149,7 +141,8 @@ void rebuildAndReapply(Design *design)
 	the_sta->sync.rebuild_pending = false;
 	// the apply keeps the unwritten commands again
 	tclEval("::ysta::clear");
-	int lost = resolveAndApply();
+	parseCommands(journal);
+	int lost = untexted + resolveAndApply();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
 }
 

@@ -70,6 +70,7 @@ bool isThroughFlag(const std::string &word);
 bool parseWords(const std::string &script, std::vector<SdcWord> &words);
 void parseSubstitution(const std::string &inner, SdcWord &word);
 void addGetterRefs(const std::string &inner, SdcWord &word);
+void parseCommands(const SdcTextByMode &modes);
 void appendTraceTexts(SdcTextByMode &modes, const char *var);
 void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag);
 std::vector<ysta::Token> tokensIn(const std::string &text);

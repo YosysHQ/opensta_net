@@ -130,6 +130,23 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 		word.kind = WordKind::Getter;
 }
 
+void parseCommands(const SdcTextByMode &modes)
+{
+	for (const auto &[mode, sdc] : modes) {
+		for (const std::string &text : sdcCommands(sdc)) {
+			if (commandName(text) == "current_design")
+				continue;
+			SdcCommand &command = the_sta->epoch.constraints.commands.emplace_back();
+			command.mode = mode;
+			command.text = text;
+			parseWords(text, command.words);
+			if (isClockCommand(commandName(text)))
+				markRefs(command.words, &SdcObjectRef::Request::wants_image);
+			command.log_text = tokensToNames(text);
+		}
+	}
+}
+
 void appendTraceTexts(SdcTextByMode &modes, const char *var)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();

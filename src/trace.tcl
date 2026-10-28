@@ -15,7 +15,7 @@ foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd 
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ysta::before_edit }
 # both as {mode command}: kept holds the commands that write_sdc does not write,
-# journal each sdc command since the last epoch end
+# journal each sdc command since the last epoch end (R1: a rebuild applies it again)
 namespace eval ::ysta {
 	variable kept {}
 	variable kept_families {}

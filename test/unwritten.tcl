@@ -1,4 +1,4 @@
-# the sync applies again what write_sdc skips or writes raw and user properties
+# the sync applies again what write_sdc skips or writes raw, the commands after the epoch end and user properties
 yosys read_liberty -lib test/simple.lib
 yosys read_verilog test/simple.v
 yosys hierarchy -top top
@@ -15,6 +15,7 @@ set_property [get_cells u_inv1] tag CELL
 set_property [get_pins u_dff0/Q] tag PIN
 set_property [get_lib_cells simple/INV] tag LIB
 yosys add -wire dummy top
+set_clock_uncertainty 0.7 [get_clocks clk]
 yosys opensta_net -sync
 foreach kept $::ysta::kept {
 	puts "KEPT [::ysta::sdc_text [lindex $kept 1]]"

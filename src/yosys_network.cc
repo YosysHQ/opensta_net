@@ -400,6 +400,12 @@ bool YosysNetwork::isClockPin(const YPin &pin)
 	return port != nullptr && port->isClock();
 }
 
+bool YosysNetwork::isBuffer(const YInstance &inst)
+{
+	const sta::LibertyCell *cell = libertyCell(reinterpret_cast<const sta::Instance *>(&inst));
+	return cell != nullptr && cell->isBuffer();
+}
+
 void YosysNetwork::buildTables(YInstance *scope)
 {
 	std::vector<std::string> own;

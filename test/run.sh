@@ -117,7 +117,7 @@ track track_flatten flatten 'EXIT 0|synced after design change, 0'
 track track_unprotect 'flatten;opensta_net -unprotect;select -assert-none t:$barrier' \
 	'EXIT 0|synced after design change, 0|synced after design change, 0'
 expect stale_rawtcl test/stale_rawtcl.ys 'synced after design change, 0 ' '^SLACK 8.85$' '^CELLS 10$'
-expect moved_pins test/moved_pins.tcl 'synced after design change, 0 ' \
+expect moved_pins test/moved_pins.tcl 'synced after design change, 0 ' '@test/moved_pins_out.sdc=-fall_from \[get_pins \{rn_reg/CK\}\]' \
 	'@test/moved_pins_out.sdc=-from \[get_pins \{rn_reg/CK\}\]' '@test/moved_pins_out.sdc=-through \[list' '@test/moved_pins_out.sdc=^set_disable_timing -from \{CK\}' '@test/moved_pins_out.sdc=get_timing_edges'
 expect removed_cell test/removed_cell.tcl 'synced after design change, 0 ' '^PATHS 1$' '@test/removed_cell_out.sdc=^set_disable_timing \[get_timing_edges'
 expect hier_thru test/hier_thru.tcl 'synced after design change, 0 ' '^INSIDE 0$'

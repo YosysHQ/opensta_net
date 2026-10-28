@@ -104,6 +104,7 @@ public:
 	bool ports(const YInstance &inst, std::vector<Netlist::PortShape> &out) override;
 	bool isRegister(const YInstance &inst) override;
 	bool isClockPin(const YPin &pin) override;
+	bool isBuffer(const YInstance &inst) override;
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;

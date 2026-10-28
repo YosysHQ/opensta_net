@@ -12,8 +12,31 @@ void rewriteWords(std::vector<SdcWord> &words)
 {
 	if (words.empty())
 		return;
+	disableWireEdges(words);
 	applyClockImages(words);
 	quoteClocks(words);
+}
+
+// a removed hierarchical pin or cell: the wire edges into the loads beyond its barriers
+void disableWireEdges(std::vector<SdcWord> &words)
+{
+	if (words[0].text != "set_disable_timing")
+		return;
+	for (SdcWord &word : words) {
+		if (word.refs.size() != 1)
+			continue;
+		SdcObjectRef &ref = the_sta->epoch.constraints.refs[word.refs[0]];
+		bool removed = ref.kind == SdcObjectRef::ObjectKind::Cell && ref.objects.empty() && !ref.result.loads_beyond.empty();
+		if (!ref.stillAsLeafPins() && !removed)
+			continue;
+		std::string handles;
+		for (const void *pin : ref.result.loads_beyond)
+			handles += " " + swigHandleOf(SdcObjectRef::ObjectKind::Pin, pin);
+		word.refs.clear();
+		word.kind = WordKind::Plain;
+		word.text = "[::ysta::wire_edges [list" + handles + "]]";
+		ref.inside_handled = true;
+	}
 }
 
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)

@@ -92,6 +92,7 @@ std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext
 
 // rewrite
 void rewriteWords(std::vector<SdcWord> &words);
+void disableWireEdges(std::vector<SdcWord> &words);
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
 void applyClockImages(const std::vector<SdcWord> &words);
 void clockImages(const std::vector<SdcWord> &words, ClockUse use);

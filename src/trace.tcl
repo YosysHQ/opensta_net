@@ -121,6 +121,17 @@ proc ::ysta::ref {obj} {
 	}
 	error "no ref for $type"
 }
+# the loads of a disabled hierarchical pin that flatten removed
+proc ::ysta::wire_edges {pins} {
+	set edges {}
+	foreach pin $pins {
+		foreach edge [get_timing_edges -to $pin] {
+			if {[$edge role] eq "wire"} { lappend edges $edge }
+		}
+	}
+	if {$edges eq {}} { error "no wire edge into the pins" }
+	return $edges
+}
 proc ::ysta::texts {name} {
 	set ::ysta::untexted 0
 	set texts [dict create]

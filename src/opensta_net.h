@@ -8,7 +8,9 @@
 
 #include <memory>
 
+#include "sta/Property.hh"
 #include "sta/ReportTcl.hh"
+#include "sta/Sdc.hh"
 #include "sta/Sta.hh"
 
 #include "constraints.h"
@@ -31,6 +33,16 @@ struct NonConsoleTee {
 struct YosysStaReport : public sta::ReportTcl {
 	int warnings = 0;
 	size_t printString(const char *buffer, size_t length) override;
+};
+
+// Sdc::clear keeps the net resistances, net voltages and wire edges of the old network
+struct StaleSdc : public sta::Sdc {
+	static void clear(sta::Sdc *sdc);
+};
+
+// no public call drops the property values of deleted objects
+struct StaleProperties : public sta::Properties {
+	static void keepOnly(sta::Properties &properties, const std::vector<const void *> &objects);
 };
 
 // track pass starts
@@ -109,6 +121,8 @@ void syncView(Design *design);
 void rebuildAndReapply(Design *design);
 void warnDroppedParasitics();
 void warnSharedNames();
+std::vector<const void *> lastingObjects();
+void addLiberty(const sta::LibertyLibrary *library, std::vector<const void *> &objects);
 void dropView();
 bool linkView(Design *design, std::string &error);
 void linkDesign(Design *design);

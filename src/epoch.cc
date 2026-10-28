@@ -8,6 +8,7 @@
 
 #include <fstream>
 
+#include "sta/Liberty.hh"
 #include "sta/MinMax.hh"
 #include "sta/Mode.hh"
 #include "sta/Parasitics.hh"
@@ -173,12 +174,68 @@ void warnSharedNames()
 		            "finds the other net.\n", shared);
 }
 
+void StaleSdc::clear(sta::Sdc *sdc)
+{
+	(sdc->*&StaleSdc::net_res_map_).clear();
+	(sdc->*&StaleSdc::net_voltage_map_).clear();
+	(sdc->*&StaleSdc::disabled_wire_edges_).clear();
+}
+
+void StaleProperties::keepOnly(sta::Properties &properties, const std::vector<const void *> &objects)
+{
+	auto &values = properties.*&StaleProperties::prop_values_;
+	const auto &types = properties.*&StaleProperties::prop_types_;
+	std::map<sta::PropertyKey, sta::PropertyValue> kept;
+	for (const auto &[type, value_type] : types) {
+		for (const void *object : objects) {
+			auto it = values.find(sta::PropertyKey(object, type.second));
+			if (it != values.end())
+				kept.insert(*it);
+		}
+	}
+	values = std::move(kept);
+}
+
+// the objects that a relink keeps, a liberty object is also its network object
+std::vector<const void *> lastingObjects()
+{
+	std::vector<const void *> objects;
+	for (const sta::Mode *mode : the_sta->modes())
+		objects.push_back(mode);
+	for (const sta::Scene *scene : the_sta->scenes())
+		objects.push_back(scene);
+	sta::LibertyLibraryIterator *libraries = the_sta->network()->libertyLibraryIterator();
+	while (libraries->hasNext())
+		addLiberty(libraries->next(), objects);
+	delete libraries;
+	return objects;
+}
+
+void addLiberty(const sta::LibertyLibrary *library, std::vector<const void *> &objects)
+{
+	objects.push_back(library);
+	sta::LibertyCellIterator cells(library);
+	while (cells.hasNext()) {
+		const sta::LibertyCell *cell = cells.next();
+		objects.push_back(cell);
+		sta::LibertyCellPortIterator ports(cell);
+		while (ports.hasNext())
+			objects.push_back(ports.next());
+		sta::LibertyCellPortBitIterator bits(cell);
+		while (bits.hasNext())
+			objects.push_back(bits.next());
+	}
+}
+
 void dropView()
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	YosysSta::ViewOwner &views = the_sta->views;
 	if (network->linked()) {
 		the_sta->networkChanged();
+		for (sta::Mode *mode : the_sta->modes())
+			StaleSdc::clear(mode->sdc());
+		StaleProperties::keepOnly(the_sta->properties(), lastingObjects());
 		network->unlink();
 	}
 	if (views.view->built())

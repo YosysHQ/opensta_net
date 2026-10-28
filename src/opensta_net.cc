@@ -1,6 +1,7 @@
 #include "opensta_net.h"
 
 #include "sta/Error.hh"
+#include "sta/Liberty.hh"
 #include "sta/MinMax.hh"
 #include "sta/Scene.hh"
 #include "sta/StaMain.hh"

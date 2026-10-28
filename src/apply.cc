@@ -33,8 +33,9 @@ int resolveAndApply()
 		lost++;
 		log_warning("opensta_net: sync: `%s` lost or changed: %s\n", normalizeCommand(command.log_text).c_str(), reason.c_str());
 	}
-	the_sta->setCmdMode(cmd_mode);
+	// the scene sets its own mode
 	the_sta->setCmdScene(cmd_scene);
+	the_sta->setCmdMode(cmd_mode);
 	tclEval("info script $::ysta::script");
 	tclEval("set ::ysta::journal {}");
 	return lost;

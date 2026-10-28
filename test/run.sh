@@ -123,7 +123,7 @@ expect unwritten test/unwritten.tcl 'synced after design change, 0 ' '^KEPT set_
 	'^CLOCKS \{a b\} clk$' '@test/unwritten_out.sdc=^set_clock_groups -name g h '
 expect sync_cmds test/sync_cmds.ys 'synced after design change, 2 constraint' '@test/sync_cmds_out.sdc=^set_max_delay' '@test/sync_cmds_out.sdc=^set_output_delay'
 expect autosync_push test/autosync_push.tcl 'PUSHED linked: 0' 'POPPED clocks: 1' '\(MET\)'
-expect multimode test/multimode.tcl '^MODE mB$' '^mB clkB$' '^mA clkA$'
+expect multimode test/multimode.tcl 'synced after design change, 0 ' '^MODE mA$' '^mA clkA$' '^mB \{clk C\} clkB$'
 expect parasitics_warned test/parasitics.tcl 'drops the loaded parasitics'
 expect liberty_missing test/liberty_missing.tcl '^CAUGHT$' '^ALIVE$'
 expect boot_fail test/boot_fail.tcl 'ERROR: OpenSTA: cannot wrap find_fanout_insts' '!^BOOTED' '!^ALIVE' '^EXIT 1$'

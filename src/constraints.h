@@ -74,6 +74,7 @@ void appendTraceTexts(SdcTextByMode &modes, const char *var);
 void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag);
 std::vector<ysta::Token> tokensIn(const std::string &text);
 std::string tokensToNames(const std::string &text);
+bool namesObject(const std::string &text);
 std::string objectName(SdcObjectRef::ObjectKind kind, const void *object);
 std::string tokenName(const ysta::Token &token);
 std::vector<uint32_t> refsOf(const std::vector<SdcWord> &words);

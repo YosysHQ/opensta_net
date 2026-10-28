@@ -87,6 +87,9 @@ bool parseWords(const std::string &script, std::vector<SdcWord> &words)
 		bool substitution = token->numComponents == 1 && token[1].type == TCL_TOKEN_COMMAND;
 		if (substitution)
 			parseSubstitution(std::string(token[1].start + 1, token[1].size - 2), word);
+		// write_sdc writes some objects raw (set_voltage a net)
+		else if (namesObject(word.text))
+			addGetterRefs(word.text, word);
 		token += token->numComponents + 1;
 	}
 	Tcl_FreeParse(&parse);
@@ -180,6 +183,15 @@ std::string tokensToNames(const std::string &text)
 		at = end;
 	}
 	return out + text.substr(at);
+}
+
+bool namesObject(const std::string &text)
+{
+	for (const auto &[kind, object] : tokensIn(text)) {
+		if (kind != SdcObjectRef::ObjectKind::Port)
+			return true;
+	}
+	return false;
 }
 
 std::string objectName(SdcObjectRef::ObjectKind kind, const void *object)

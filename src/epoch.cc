@@ -60,6 +60,7 @@ bool captureEpochConstraints()
 	bool journaled = written || tclInt("expr {$::ysta::untexted == 0}") == 1;
 	tclEval("set ::ysta::journal {}");
 	parseCommands(modes);
+	orderOverrides(epoch.constraints.commands);
 	the_sta->views.view->closeEpoch(epoch.constraints.view_refs, epoch.protection);
 	return journaled;
 }

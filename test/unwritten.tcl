@@ -1,4 +1,4 @@
-# the sync applies again what write_sdc skips or writes raw, the commands after the epoch end and user properties
+# the sync applies again what write_sdc skips or writes raw, the commands after the epoch end, user properties and kept exceptions around an unset in order
 yosys read_liberty -lib test/simple.lib
 yosys read_verilog test/simple.v
 yosys hierarchy -top top
@@ -16,6 +16,9 @@ define_property -object_type liberty_cell -type string tag
 set_property [get_cells u_inv1] tag CELL
 set_property [get_pins u_dff0/Q] tag PIN
 set_property [get_lib_cells simple/INV] tag LIB
+set_max_delay -probe -from [get_ports in] -to [get_pins u_dff0/D] 3
+unset_path_exceptions -from [get_ports in] -to [get_pins u_dff0/D]
+set_max_delay -probe -from [get_ports in] -to [get_pins u_dff0/D] 6
 yosys add -wire dummy top
 set_clock_uncertainty 0.7 [get_clocks clk]
 set_clock_groups -name {g h} -asynchronous -group [get_clocks {{a b}}]
@@ -25,5 +28,6 @@ foreach kept $::ysta::kept {
 }
 puts "AFTER [get_property [get_cells u_inv1] tag] [get_property [get_pins u_dff0/Q] tag]"
 puts "LIB [get_property [get_lib_cells simple/INV] tag]"
+puts "SLACK [get_property [lindex [find_timing_paths -from [get_ports in] -to [get_pins u_dff0/D]] 0] slack]"
 puts "CLOCKS [lsort [lmap clock [all_clocks] {get_name $clock}]]"
 write_sdc -no_timestamp test/unwritten_out.sdc

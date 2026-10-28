@@ -74,6 +74,8 @@ void parseCommands(const SdcTextByMode &modes);
 void appendTraceTexts(SdcTextByMode &modes, const char *var);
 void joinName(std::vector<SdcWord> &words);
 void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag);
+bool tightness(const SdcCommand &command, double &tight);
+void orderOverrides(std::vector<SdcCommand> &commands);
 std::vector<ysta::Token> tokensIn(const std::string &text);
 std::string tokensToNames(const std::string &text);
 bool namesObject(const std::string &text);

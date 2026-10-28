@@ -3,6 +3,8 @@
 // - render  the words as a script on the objects that resolve found
 #include "opensta_net.h"
 
+#include <charconv>
+
 USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
@@ -182,6 +184,48 @@ void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*fl
 {
 	for (uint32_t index : refsOf(words))
 		the_sta->epoch.constraints.refs[index].request.*flag = true;
+}
+
+// larger is tighter, the value is the last word, only -comment after it
+bool tightness(const SdcCommand &command, double &tight)
+{
+	static const dict<std::string, double> signs = {{"set_min_delay", 1}, {"set_max_delay", -1}, {"set_multicycle_path", -1}};
+	const std::vector<SdcWord> &words = command.words;
+	if (words.empty() || !signs.count(words[0].text))
+		return false;
+	size_t end = words.size();
+	if (end >= 2 && words[end - 2].text == "-comment")
+		end -= 2;
+	const std::string &text = words[end - 1].text;
+	double value;
+	auto [ptr, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+	if (error != std::errc() || ptr != text.data() + text.size())
+		return false;
+	tight = signs.at(words[0].text) * value;
+	return true;
+}
+
+// opensta takes the later of two exceptions on a path that flatten made them share
+void orderOverrides(std::vector<SdcCommand> &commands)
+{
+	std::vector<std::tuple<int, double, size_t>> order;
+	std::vector<size_t> places;
+	int unsets = 0;
+	for (size_t i = 0; i < commands.size(); i++) {
+		double tight;
+		if (!commands[i].words.empty() && commands[i].words[0].text == "unset_path_exceptions")
+			unsets++;
+		if (!tightness(commands[i], tight))
+			continue;
+		order.push_back({unsets, tight, i});
+		places.push_back(i);
+	}
+	std::stable_sort(order.begin(), order.end());
+	std::vector<SdcCommand> sorted;
+	for (const auto &[run, tight, index] : order)
+		sorted.push_back(std::move(commands[index]));
+	for (size_t i = 0; i < places.size(); i++)
+		commands[places[i]] = std::move(sorted[i]);
 }
 
 std::vector<ysta::Token> tokensIn(const std::string &text)

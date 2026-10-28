@@ -124,7 +124,6 @@ void applyClockImages(const std::vector<SdcWord> &words);
 void clockImages(const std::vector<SdcWord> &words, ClockUse use);
 void pickClockImage(SdcObjectRef &ref, ClockUse use);
 std::vector<const void *> loadsInside(const SdcObjectRef &ref);
-void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads);
 void quoteClocks(std::vector<SdcWord> &words);
 
 // apply

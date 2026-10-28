@@ -97,8 +97,7 @@ void disableWireEdges(std::vector<SdcWord> &words)
 		if (word.refs.size() != 1)
 			continue;
 		SdcObjectRef &ref = the_sta->epoch.constraints.refs[word.refs[0]];
-		bool removed = ref.kind == SdcObjectRef::ObjectKind::Cell && ref.objects.empty() && !ref.result.loads_beyond.empty();
-		if (!ref.stillAsLeafPins() && !removed)
+		if (!ref.stillAsLeafPins() && !ref.removedButLoadsKept())
 			continue;
 		std::string handles;
 		for (const void *pin : ref.result.loads_beyond)
@@ -166,12 +165,10 @@ std::string rotateEdges(const std::string &text)
 	return "{" + parts[1] + " " + parts[2] + " " + std::to_string(next) + "}";
 }
 
-// a getter with a ref whose exact pins are not its found pins
 bool anyBehindNewLogic(const SdcWord &word)
 {
 	for (uint32_t index : word.refs) {
-		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		if (!ref.result.exact_pins.empty() && ref.result.exact_pins != ref.objects)
+		if (the_sta->epoch.constraints.refs[index].isBehindNewLogic())
 			return true;
 	}
 	return false;
@@ -235,21 +232,12 @@ std::vector<const void *> loadsInside(const SdcObjectRef &ref)
 	if (ref.stillAsLeafPins())
 		loads = ref.objects;
 	else
-		addInnerLoads(ref.objects, loads);
+		the_sta->views.view->loadsBehindPins(ref.objects, loads);
 	if (loads.empty())
 		return ref.objects;
 	const std::vector<const void *> &image_y_pins = ref.result.image_y_pins;
 	loads.insert(loads.end(), image_y_pins.begin(), image_y_pins.end());
 	return loads;
-}
-
-void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads)
-{
-	for (const void *object : pins) {
-		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
-		if (pin->term != nullptr)
-			the_sta->views.view->innerPins(pin->term->net, WalkTarget::Loads, loads);
-	}
 }
 
 // write_sdc writes a clock name raw in braces, {a b} for the clock a b

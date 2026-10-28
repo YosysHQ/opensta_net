@@ -72,6 +72,7 @@ void parseSubstitution(const std::string &inner, SdcWord &word);
 void addGetterRefs(const std::string &inner, SdcWord &word);
 void parseCommands(const SdcTextByMode &modes);
 void appendTraceTexts(SdcTextByMode &modes, const char *var);
+void joinName(std::vector<SdcWord> &words);
 void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag);
 std::vector<ysta::Token> tokensIn(const std::string &text);
 std::string tokensToNames(const std::string &text);
@@ -88,12 +89,14 @@ std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, T
 std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context);
 
 // rewrite
+void rewriteWords(std::vector<SdcWord> &words);
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
 void applyClockImages(const std::vector<SdcWord> &words);
 void clockImages(const std::vector<SdcWord> &words, ClockUse use);
 void pickClockImage(SdcObjectRef &ref, ClockUse use);
 std::vector<const void *> loadsInside(const SdcObjectRef &ref);
 void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void *> &loads);
+void quoteClocks(std::vector<SdcWord> &words);
 
 // apply
 int resolveAndApply();

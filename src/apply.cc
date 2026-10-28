@@ -45,18 +45,19 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
 	int empty_getters = 0;
-	applyClockImages(command.words);
+	std::vector<SdcWord> words = command.words;
+	rewriteWords(words);
 	std::string script = command.text;
-	if (!command.words.empty())
-		script = renderWords(command.words, empty_getters, ThroughContext::OutsideThrough);
-	std::string missing = missingNames(command.words);
+	if (!words.empty())
+		script = renderWords(words, empty_getters, ThroughContext::OutsideThrough);
+	std::string missing = missingNames(words);
 	std::string moved = namesMovedInside(command.words);
 	// an empty getter would widen a path exception
 	if (empty_getters > 0) {
 		reason = "no object found for " + missing;
 		return false;
 	}
-	if (!refsOf(command.words).empty() && !foundAny(command.words)) {
+	if (!refsOf(words).empty() && !foundAny(words)) {
 		reason = "-unprotect removed the barrier that kept its hierarchical pin";
 		return false;
 	}

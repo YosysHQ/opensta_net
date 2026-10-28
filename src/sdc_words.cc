@@ -140,6 +140,7 @@ void parseCommands(const SdcTextByMode &modes)
 			command.mode = mode;
 			command.text = text;
 			parseWords(text, command.words);
+			joinName(command.words);
 			if (isClockCommand(commandName(text)))
 				markRefs(command.words, &SdcObjectRef::Request::wants_image);
 			command.log_text = tokensToNames(text);
@@ -156,6 +157,25 @@ void appendTraceTexts(SdcTextByMode &modes, const char *var)
 		return;
 	for (int i = 0; i + 1 < count; i += 2)
 		modes[Tcl_GetString(items[i])] += Tcl_GetString(items[i + 1]);
+}
+
+// write_sdc writes a -name raw up to the next option, a journal or kept text braces it
+void joinName(std::vector<SdcWord> &words)
+{
+	size_t at = 0;
+	while (at < words.size() && words[at].text != "-name")
+		at++;
+	size_t end = at + 1;
+	while (end < words.size() && !words[end].text.starts_with("-") && words[end].kind == WordKind::Plain)
+		end++;
+	bool braced = end == at + 2 && words[at + 1].text.starts_with("{");
+	if (end <= at + 1 || braced)
+		return;
+	std::string name = words[at + 1].text;
+	for (size_t i = at + 2; i < end; i++)
+		name += " " + words[i].text;
+	words[at + 1] = SdcWord{tclQuoted(name)};
+	words.erase(words.begin() + at + 2, words.begin() + end);
 }
 
 void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag)

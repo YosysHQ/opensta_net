@@ -1,10 +1,20 @@
-// the words on the objects that passes moved
+// the words on the objects that passes moved, then the clock names, in the mode of the command
 // (a removed hierarchical pin goes on the leaf pins that opensta takes for it)
 #include "opensta_net.h"
+
+#include "sta/Mode.hh"
 
 USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
+
+void rewriteWords(std::vector<SdcWord> &words)
+{
+	if (words.empty())
+		return;
+	applyClockImages(words);
+	quoteClocks(words);
+}
 
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)
 {
@@ -17,8 +27,6 @@ bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)
 
 void applyClockImages(const std::vector<SdcWord> &words)
 {
-	if (words.empty())
-		return;
 	if (isClockCommand(words[0].text))
 		clockImages(words, ClockUse::Clock);
 	else if (words[0].text == "set_clock_latency" && hasFlag(words, "-source"))
@@ -80,6 +88,22 @@ void addInnerLoads(const std::vector<const void *> &pins, std::vector<const void
 		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
 		if (pin->term != nullptr)
 			the_sta->views.view->innerPins(pin->term->net, WalkTarget::Loads, loads);
+	}
+}
+
+// write_sdc writes a clock name raw in braces, {a b} for the clock a b
+void quoteClocks(std::vector<SdcWord> &words)
+{
+	for (SdcWord &word : words) {
+		std::vector<SdcWord> &inner = word.nested_words;
+		quoteClocks(inner);
+		if (inner.size() != 2 || inner[0].text != "get_clocks")
+			continue;
+		std::string name = inner[1].text;
+		if (name.size() > 2 && name.front() == '{' && name.back() == '}')
+			name = name.substr(1, name.size() - 2);
+		if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) != nullptr)
+			inner[1].text = tclQuoted(tclQuoted(name));
 	}
 }
 

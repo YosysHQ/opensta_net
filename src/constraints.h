@@ -16,7 +16,7 @@ using SdcTextByMode = Yosys::dict<std::string, std::string>;
 struct SdcObjectRef : Yosys::TrackedRef {
 	std::string name;
 	bool used_outside_through = false;
-	std::vector<const void *> use_objects = {}; // objects of a clock use, else objects
+	std::vector<const void *> use_objects = {}; // objects of a clock use or an arc, else objects
 	bool inside_handled = false;                // a rewrite took the leaf pins of a flattened hierarchical pin
 	bool stillAsLeafPins() const;
 };
@@ -35,6 +35,11 @@ enum class PinChoice : uint8_t {
 enum class ThroughContext : uint8_t {
 	OutsideThrough,
 	AfterThrough
+};
+
+enum class ArcEnd : uint8_t {
+	From,
+	To
 };
 
 enum class RefMark : uint8_t {
@@ -105,6 +110,8 @@ std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext
 
 // rewrite
 void rewriteWords(std::vector<SdcWord> &words);
+void remapArcPorts(std::vector<SdcWord> &words);
+void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::string &text);
 void splitEndpoints(std::vector<SdcWord> &words);
 void exactStartPins(std::vector<SdcWord> &words, size_t at);
 void disableWireEdges(std::vector<SdcWord> &words);

@@ -12,12 +12,42 @@ void rewriteWords(std::vector<SdcWord> &words)
 {
 	if (words.empty())
 		return;
+	remapArcPorts(words);
 	splitEndpoints(words);
 	disableWireEdges(words);
 	hierPinLoads(words);
 	invertClock(words);
 	applyClockImages(words);
 	quoteClocks(words);
+}
+
+// abc maps a gate to cells: the arc takes their ports, only on the cells of the -from pins
+void remapArcPorts(std::vector<SdcWord> &words)
+{
+	for (size_t i = 0; i + 1 < words.size(); i++) {
+		if (words[i].text != "-from" && words[i].text != "-to")
+			continue;
+		std::string &text = words[i + 1].text;
+		std::string name = text;
+		if (text.size() > 2 && text.front() == '{')
+			name = text.substr(1, text.size() - 2);
+		ArcEnd end = ArcEnd::To;
+		if (words[i].text == "-from")
+			end = ArcEnd::From;
+		for (uint32_t index : refsOf(words))
+			remapPort(the_sta->epoch.constraints.refs[index], name, end, text);
+	}
+}
+
+void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::string &text)
+{
+	for (const auto &[old_port, new_port, cell] : ref.result.port_renames) {
+		if (old_port != name)
+			continue;
+		text = "{" + new_port + "}";
+		if (end == ArcEnd::From)
+			ref.use_objects.push_back(cell);
+	}
 }
 
 // a -to behind new logic (a mux before D): -through the old signal, -to the exact pins

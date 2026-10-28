@@ -121,7 +121,36 @@ proc ::ysta::ref {obj} {
 	}
 	error "no ref for $type"
 }
-# the loads of a disabled hierarchical pin that flatten removed
+# the timing edges of each pin pair (abc9 -lut maps a gate to luts), else the wire edges into
+# the -from pins: a cell with one output passes every path
+proc ::ysta::edges {froms tos} {
+	set edges {}
+	foreach from $froms {
+		set from_edges {}
+		foreach to $tos { lappend from_edges {*}[get_timing_edges -from $from -to $to] }
+		if {$from_edges eq {}} { return [::ysta::wire_edges $froms] }
+		lappend edges {*}$from_edges
+	}
+	return $edges
+}
+# rise and fall swap behind an inverting edge from the old signal
+proc ::ysta::start_edge {flag froms} {
+	foreach from $froms {
+		foreach edge [get_timing_edges -from $from] {
+			if {[::ysta::inverts $edge]} { return [string map {rise fall fall rise} $flag] }
+		}
+	}
+	return $flag
+}
+# a liberty without timing_sense leaves the sense unknown
+proc ::ysta::inverts {edge} {
+	set arcs [$edge timing_arcs]
+	foreach arc $arcs {
+		if {[$arc from_edge_name] eq [$arc to_edge_name]} { return 0 }
+	}
+	return [expr {$arcs ne {}}]
+}
+# the loads of a disabled hierarchical pin that flatten removed, the -from pins of a mapped arc
 proc ::ysta::wire_edges {pins} {
 	set edges {}
 	foreach pin $pins {
@@ -131,6 +160,20 @@ proc ::ysta::wire_edges {pins} {
 	}
 	if {$edges eq {}} { error "no wire edge into the pins" }
 	return $edges
+}
+# 1 when each edge into each found pin inverts and comes from an exact pin
+proc ::ysta::behind_inverter {founds exacts} {
+	set nets {}
+	foreach exact $exacts { lappend nets [get_full_name [get_nets -of_objects $exact]] }
+	foreach found $founds {
+		set edges [get_timing_edges -to $found]
+		if {$edges eq {}} { return 0 }
+		foreach edge $edges {
+			set net [get_full_name [get_nets -of_objects [$edge from_pin]]]
+			if {![::ysta::inverts $edge] || $net ni $nets} { return 0 }
+		}
+	}
+	return 1
 }
 proc ::ysta::texts {name} {
 	set ::ysta::untexted 0

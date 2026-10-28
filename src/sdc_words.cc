@@ -77,6 +77,21 @@ bool isThroughFlag(const std::string &word)
 	return word == "-through" || word == "-rise_through" || word == "-fall_through";
 }
 
+// get_timing_edges -from X -to Y
+bool isEdgePair(const std::vector<SdcWord> &words)
+{
+	return words.size() == 5 && words[0].text == "get_timing_edges" && words[1].text == "-from" && words[3].text == "-to";
+}
+
+bool isGetterList(const std::vector<SdcWord> &words)
+{
+	for (size_t i = 1; i < words.size(); i++) {
+		if (words[i].kind != WordKind::Getter)
+			return false;
+	}
+	return words.size() > 1 && words[0].text == "list";
+}
+
 bool parseWords(const std::string &script, std::vector<SdcWord> &words)
 {
 	Tcl_Parse parse;
@@ -111,6 +126,14 @@ void parseSubstitution(const std::string &inner, SdcWord &word)
 		return;
 	if (parseWords(inner, word.nested_words))
 		word.kind = WordKind::Substitution;
+	if (isEdgePair(word.nested_words))
+		markRefs(word.nested_words, RefMark::IsolateCell);
+	// R4: a list of getters is one getter, so the rewrites see its refs
+	if (isGetterList(word.nested_words)) {
+		word.refs = refsOf(word.nested_words);
+		word.nested_words.clear();
+		word.kind = WordKind::Getter;
+	}
 }
 
 void addGetterRefs(const std::string &inner, SdcWord &word)
@@ -144,7 +167,7 @@ void parseCommands(const SdcTextByMode &modes)
 			parseWords(text, command.words);
 			joinName(command.words);
 			if (isClockCommand(commandName(text)))
-				markRefs(command.words, &SdcObjectRef::Request::wants_image);
+				markRefs(command.words, RefMark::WantsImage);
 			command.log_text = tokensToNames(text);
 		}
 	}
@@ -180,10 +203,15 @@ void joinName(std::vector<SdcWord> &words)
 	words.erase(words.begin() + at + 2, words.begin() + end);
 }
 
-void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag)
+void markRefs(const std::vector<SdcWord> &words, RefMark mark)
 {
-	for (uint32_t index : refsOf(words))
-		the_sta->epoch.constraints.refs[index].request.*flag = true;
+	for (uint32_t index : refsOf(words)) {
+		SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+		if (mark == RefMark::IsolateCell)
+			ref.request.isolate_cell = true;
+		else
+			ref.request.wants_image = true;
+	}
 }
 
 // larger is tighter, the value is the last word, only -comment after it
@@ -350,17 +378,19 @@ bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context)
 	return context == ThroughContext::AfterThrough && !ref.result.through_pins.empty();
 }
 
-// the objects of a use beat the found objects
-const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context)
+// the exact pins beat the objects of a use, which beat the found objects
+const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
 {
 	if (rendersThroughPins(ref, context))
 		return ref.result.through_pins;
+	if (choice == PinChoice::ExactPins && !ref.result.exact_pins.empty())
+		return ref.result.exact_pins;
 	if (!ref.use_objects.empty())
 		return ref.use_objects;
 	return ref.objects;
 }
 
-std::string refHandles(SdcObjectRef &ref, ThroughContext context)
+std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice)
 {
 	if (context == ThroughContext::OutsideThrough)
 		ref.used_outside_through = true;
@@ -368,7 +398,7 @@ std::string refHandles(SdcObjectRef &ref, ThroughContext context)
 	if (rendersThroughPins(ref, context))
 		kind = SdcObjectRef::ObjectKind::Pin;
 	std::string handles;
-	for (const void *object : objectsToRender(ref, context)) {
+	for (const void *object : objectsToRender(ref, context, choice)) {
 		if (kind == SdcObjectRef::ObjectKind::Port)
 			handles += " [get_ports " + tclQuoted(objectName(kind, object)) + "]";
 		else
@@ -389,6 +419,9 @@ std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, T
 			word_context = ThroughContext::AfterThrough;
 		if (word.kind == WordKind::Getter) {
 			text += renderGetter(word, empty_getters, word_context);
+		} else if (word.kind == WordKind::Substitution && isEdgePair(word.nested_words)) {
+			std::vector<SdcWord> pair = {word.nested_words[2], word.nested_words[4]};
+			text += "[::ysta::edges " + renderWords(pair, empty_getters, word_context) + "]";
 		} else if (word.kind == WordKind::Substitution) {
 			text += "[" + renderWords(word.nested_words, empty_getters, word_context) + "]";
 		} else {
@@ -403,7 +436,7 @@ std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext
 {
 	std::string handles;
 	for (uint32_t index : word.refs)
-		handles += refHandles(the_sta->epoch.constraints.refs[index], context);
+		handles += refHandles(the_sta->epoch.constraints.refs[index], context, word.pin_choice);
 	empty_getters += handles.empty() && !onlyImagePins(word);
 	return "[list" + handles + "]";
 }

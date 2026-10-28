@@ -12,10 +12,50 @@ void rewriteWords(std::vector<SdcWord> &words)
 {
 	if (words.empty())
 		return;
+	splitEndpoints(words);
 	disableWireEdges(words);
 	hierPinLoads(words);
+	invertClock(words);
 	applyClockImages(words);
 	quoteClocks(words);
+}
+
+// a -to behind new logic (a mux before D): -through the old signal, -to the exact pins
+void splitEndpoints(std::vector<SdcWord> &words)
+{
+	static const pool<std::string> commands = {"set_false_path", "set_multicycle_path", "set_max_delay", "set_min_delay", "set_data_check"};
+	if (!commands.count(words[0].text))
+		return;
+	bool check = words[0].text == "set_data_check";
+	for (size_t i = 1; i + 1 < words.size(); i++) {
+		bool to = words[i].text == "-to" || words[i].text == "-rise_to" || words[i].text == "-fall_to";
+		bool from = words[i].text == "-from" || words[i].text == "-rise_from" || words[i].text == "-fall_from";
+		if (!anyBehindNewLogic(words[i + 1]))
+			continue;
+		if (from)
+			exactStartPins(words, i);
+		if (!to)
+			continue;
+		SdcWord through = words[i + 1];
+		words[i + 1].pin_choice = PinChoice::ExactPins;
+		if (check)
+			continue;
+		words.insert(words.begin() + i, {SdcWord{"-through"}, through});
+		i += 2;
+	}
+}
+
+// a -from behind new logic (an inverter before C): the exact pin with the edge of the old signal
+void exactStartPins(std::vector<SdcWord> &words, size_t at)
+{
+	SdcWord found = words[at + 1];
+	words[at + 1].pin_choice = PinChoice::ExactPins;
+	if (words[at].text == "-from")
+		return;
+	SdcWord flag;
+	flag.kind = WordKind::Substitution;
+	flag.nested_words = {SdcWord{"::ysta::start_edge"}, SdcWord{words[at].text}, found};
+	words[at] = flag;
 }
 
 // a removed hierarchical pin or cell: the wire edges into the loads beyond its barriers
@@ -54,6 +94,57 @@ void hierPinLoads(std::vector<SdcWord> &words)
 			ref.inside_handled = true;
 		}
 	}
+}
+
+// a generated clock behind a new inverter after Q goes on Q inverted, opensta shifts an -edge_shift inverse by a period
+void invertClock(std::vector<SdcWord> &words)
+{
+	if (words[0].text != "create_generated_clock" || !anyBehindNewLogic(words.back()) || hasFlag(words, "-edge_shift"))
+		return;
+	std::string found, exact;
+	for (uint32_t index : words.back().refs) {
+		SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+		found += refHandles(ref, ThroughContext::OutsideThrough, PinChoice::FoundPins);
+		exact += refHandles(ref, ThroughContext::OutsideThrough, PinChoice::ExactPins);
+	}
+	if (tclInt("::ysta::behind_inverter [list" + found + "] [list" + exact + "]") != 1)
+		return;
+	words.back().pin_choice = PinChoice::ExactPins;
+	bool edges = false;
+	size_t invert = 0;
+	for (size_t i = 1; i + 1 < words.size(); i++) {
+		if (words[i].text == "-invert")
+			invert = i;
+		if (words[i].text == "-edges") {
+			words[i + 1].text = rotateEdges(words[i + 1].text);
+			edges = true;
+		}
+	}
+	if (invert != 0)
+		words.erase(words.begin() + invert);
+	else if (!edges)
+		words.insert(words.end() - 1, SdcWord{"-invert"});
+}
+
+// the edges of the inverse clock, {a b c} as {b c c+b-a}
+std::string rotateEdges(const std::string &text)
+{
+	std::vector<std::string> parts = split_tokens(text.substr(1, text.size() - 2), " ");
+	if (parts.size() != 3)
+		return text;
+	int next = atoi(parts[2].c_str()) + atoi(parts[1].c_str()) - atoi(parts[0].c_str());
+	return "{" + parts[1] + " " + parts[2] + " " + std::to_string(next) + "}";
+}
+
+// a getter with a ref whose exact pins are not its found pins
+bool anyBehindNewLogic(const SdcWord &word)
+{
+	for (uint32_t index : word.refs) {
+		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+		if (!ref.result.exact_pins.empty() && ref.result.exact_pins != ref.objects)
+			return true;
+	}
+	return false;
 }
 
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)

@@ -27,9 +27,19 @@ enum class WordKind : uint8_t {
 	Substitution // its nested words
 };
 
+enum class PinChoice : uint8_t {
+	FoundPins,
+	ExactPins
+};
+
 enum class ThroughContext : uint8_t {
 	OutsideThrough,
 	AfterThrough
+};
+
+enum class RefMark : uint8_t {
+	IsolateCell,
+	WantsImage
 };
 
 enum class ClockUse : uint8_t {
@@ -45,6 +55,7 @@ struct SdcWord {
 	WordKind kind = WordKind::Plain;
 	std::vector<SdcWord> nested_words = {};
 	std::vector<uint32_t> refs = {};
+	PinChoice pin_choice = PinChoice::FoundPins;
 };
 
 struct SdcCommand {
@@ -67,13 +78,15 @@ std::string normalizeCommand(const std::string &cmd);
 std::string commandName(const std::string &script);
 bool isClockCommand(const std::string &name);
 bool isThroughFlag(const std::string &word);
+bool isEdgePair(const std::vector<SdcWord> &words);
+bool isGetterList(const std::vector<SdcWord> &words);
 bool parseWords(const std::string &script, std::vector<SdcWord> &words);
 void parseSubstitution(const std::string &inner, SdcWord &word);
 void addGetterRefs(const std::string &inner, SdcWord &word);
 void parseCommands(const SdcTextByMode &modes);
 void appendTraceTexts(SdcTextByMode &modes, const char *var);
 void joinName(std::vector<SdcWord> &words);
-void markRefs(const std::vector<SdcWord> &words, bool SdcObjectRef::Request::*flag);
+void markRefs(const std::vector<SdcWord> &words, RefMark mark);
 bool tightness(const SdcCommand &command, double &tight);
 void orderOverrides(std::vector<SdcCommand> &commands);
 std::vector<ysta::Token> tokensIn(const std::string &text);
@@ -85,15 +98,20 @@ std::vector<uint32_t> refsOf(const std::vector<SdcWord> &words);
 std::string tclQuoted(const std::string &text);
 std::string swigHandleOf(SdcObjectRef::ObjectKind kind, const void *object);
 bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context);
-const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context);
-std::string refHandles(SdcObjectRef &ref, ThroughContext context);
+const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice);
+std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice);
 std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, ThroughContext context);
 std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context);
 
 // rewrite
 void rewriteWords(std::vector<SdcWord> &words);
+void splitEndpoints(std::vector<SdcWord> &words);
+void exactStartPins(std::vector<SdcWord> &words, size_t at);
 void disableWireEdges(std::vector<SdcWord> &words);
 void hierPinLoads(std::vector<SdcWord> &words);
+void invertClock(std::vector<SdcWord> &words);
+std::string rotateEdges(const std::string &text);
+bool anyBehindNewLogic(const SdcWord &word);
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
 void applyClockImages(const std::vector<SdcWord> &words);
 void clockImages(const std::vector<SdcWord> &words, ClockUse use);

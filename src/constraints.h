@@ -96,7 +96,7 @@ bool parseWords(const std::string &script, std::vector<SdcWord> &words);
 void parseSubstitution(const std::string &inner, SdcWord &word);
 void addGetterRefs(const std::string &inner, SdcWord &word);
 void parseCommands(const SdcTextByMode &modes);
-void appendTraceTexts(SdcTextByMode &modes, const char *var);
+int appendTraceTexts(SdcTextByMode &modes, const char *list);
 void joinName(std::vector<SdcWord> &words);
 void markRefs(const std::vector<SdcWord> &words, RefMark mark);
 bool tightness(const SdcCommand &command, double &tight);
@@ -145,6 +145,7 @@ bool foundAny(const std::vector<SdcWord> &words);
 bool onlyBarrierInstancePins(const SdcWord &word);
 std::string missingNames(const std::vector<SdcWord> &words);
 int tclInt(const std::string &script);
+std::string swapInfoScript(const std::string &script);
 
 } // namespace opensta_net
 

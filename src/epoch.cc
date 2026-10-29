@@ -3,7 +3,7 @@
 // 2. each token becomes a ref, which anchors its rtlil objects
 // 3. passes carry the anchors
 // 4. the first query after a change opens the epoch: rebuild, then resolveAndApply
-// the trace keeps what write_sdc does not write and the commands since the epoch end (::ysta::note)
+// the trace keeps what write_sdc does not write and the commands since the epoch end (::ysta::record in trace.tcl)
 #include "opensta_net.h"
 
 #include <fstream>
@@ -50,15 +50,15 @@ bool captureEpochConstraints()
 	epoch.tokens.clear();
 	the_sta->yosys_network->setTokenSink(&epoch.tokens);
 	bool written = writeAllModes(modes);
-	const char *trace_var = "::ysta::journal";
+	const char *list = "journal";
 	if (written)
-		trace_var = "::ysta::kept";
-	appendTraceTexts(modes, trace_var);
+		list = "kept";
+	int untexted = appendTraceTexts(modes, list);
 	the_sta->yosys_network->setTokenSink(nullptr);
 	if (written)
 		epoch.constraints = {};
-	bool journaled = written || tclInt("expr {$::ysta::untexted == 0}") == 1;
-	tclEval("set ::ysta::journal {}");
+	bool journaled = written || untexted == 0;
+	tclEval("::ysta::clear_journal");
 	parseCommands(modes);
 	orderOverrides(epoch.constraints.commands);
 	epoch.tracker.checkpoint(*the_sta->views.view, epoch.constraints.view_refs, epoch.track_mode);
@@ -139,8 +139,7 @@ void rebuildAndReapply(Design *design)
 	warnDroppedParasitics();
 	// the commands since the epoch end read no network object, else a sync ran before them
 	SdcTextByMode journal;
-	appendTraceTexts(journal, "::ysta::journal");
-	int untexted = tclInt("set ::ysta::untexted");
+	int untexted = appendTraceTexts(journal, "journal");
 	std::string error;
 	if (!linkView(design, error)) {
 		the_sta->sync.rebuild_pending = true;

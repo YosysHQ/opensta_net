@@ -194,15 +194,25 @@ void parseCommands(const SdcTextByMode &modes)
 	}
 }
 
-void appendTraceTexts(SdcTextByMode &modes, const char *var)
+// adds the texts of the kept list or the journal (::ysta::texts), returns the count of commands with no text
+int appendTraceTexts(SdcTextByMode &modes, const char *list)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
+	if (!tclEval(std::string("::ysta::texts ") + list))
+		return 0;
+	int size = 0;
+	Tcl_Obj **result = nullptr;
+	if (Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &size, &result) != TCL_OK || size != 2)
+		return 0;
 	int count = 0;
 	Tcl_Obj **items = nullptr;
-	if (!tclEval(std::string("::ysta::texts ") + var) || Tcl_ListObjGetElements(interp, Tcl_GetObjResult(interp), &count, &items) != TCL_OK)
-		return;
+	if (Tcl_ListObjGetElements(interp, result[0], &count, &items) != TCL_OK)
+		return 0;
 	for (int i = 0; i + 1 < count; i += 2)
 		modes[Tcl_GetString(items[i])] += Tcl_GetString(items[i + 1]);
+	int untexted = 0;
+	Tcl_GetIntFromObj(nullptr, result[1], &untexted);
+	return untexted;
 }
 
 // write_sdc writes a -name raw up to the next option, a journal or kept text braces it

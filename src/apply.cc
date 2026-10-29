@@ -19,7 +19,7 @@ int resolveAndApply()
 	the_sta->epoch.tracker.resolve(*the_sta->views.view, constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
-	tclEval("set ::ysta::script [info script]; info script {}");
+	std::string script = swapInfoScript("");
 	int lost = 0;
 	for (const SdcCommand &command : constraints.commands) {
 		the_sta->setCmdMode(command.mode);
@@ -32,8 +32,9 @@ int resolveAndApply()
 	// the scene sets its own mode
 	the_sta->setCmdScene(cmd_scene);
 	the_sta->setCmdMode(cmd_mode);
-	tclEval("info script $::ysta::script");
-	tclEval("set ::ysta::journal {}");
+	swapInfoScript(script);
+	// the apply journaled the commands again
+	tclEval("::ysta::clear_journal");
 	return lost;
 }
 
@@ -59,13 +60,13 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		return false;
 	}
 	int warnings = report->warnings;
-	int kept = tclInt("llength $::ysta::kept");
+	int kept = tclInt("::ysta::kept_count");
 	if (Tcl_EvalEx(interp, script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
 		reason = std::string("failed: ") + Tcl_GetStringResult(interp);
 		return false;
 	}
 	// a warning of a command that the trace keeps again loses nothing
-	if (report->warnings != warnings && tclInt("llength $::ysta::kept") == kept) {
+	if (report->warnings != warnings && tclInt("::ysta::kept_count") == kept) {
 		reason = "applied with a warning";
 		return false;
 	}
@@ -153,6 +154,15 @@ int tclInt(const std::string &script)
 {
 	tclEval(script);
 	return atoi(Tcl_GetStringResult(yosys_get_tcl_interp()));
+}
+
+// sets [info script] and returns the last one, sta_warn and sta_error add its file and line to a message
+std::string swapInfoScript(const std::string &script)
+{
+	tclEval("info script");
+	std::string last = Tcl_GetStringResult(yosys_get_tcl_interp());
+	tclEval("info script " + tclQuoted(script));
+	return last;
 }
 
 } // namespace opensta_net

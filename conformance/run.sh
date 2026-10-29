@@ -1,103 +1,34 @@
 #!/usr/bin/env bash
-# Run OpenSTA network/, sdc/ and search/test conformance cases against the
-# YosysNetwork adapter
+# run the OpenSTA network/, sdc/ and search/ tests on the design in yosys and
+# compare the output with their .ok: bash conformance/run.sh [name...]
 set -u
+cd "$(dirname "$0")/.."
+ROOT=$PWD
+STA_ROOT="${STA_ROOT:-$ROOT/deps/OpenSTA}"
+YOSYS="${YOSYS:-$ROOT/deps/yosys/build/yosys}"
+PLUGIN="${PLUGIN:-$ROOT/opensta_net.so}"
+OUT=$ROOT/conformance/out
+# edit tests
+refused=" network_modify network_deep_modify network_connected_pins network_cell_match_merge
+	network_multi_lib network_leaf_iter network_hierarchy network_merge_bus_hier
+	network_connect_liberty search_network_edit_deep search_network_edit_replace
+	search_network_sta_deep search_search_arrival_required search_sta_extra search_write_sdf_model "
+mkdir -p "$OUT"
 
-SPIKE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-STA_ROOT="${STA_ROOT:-$SPIKE_DIR/deps/OpenSTA}"
-YOSYS="${YOSYS:-$SPIKE_DIR/deps/yosys/build/yosys}"
-PLUGIN="${PLUGIN:-$SPIKE_DIR/opensta_net.so}"
-WORK="$SPIKE_DIR/conformance/work"
-mkdir -p "$WORK"
-
-pass=0; fail=0; err=0; total=0
-filter="${1:-}"
-rm -f "$WORK"/*.out "$WORK"/*.diff "$WORK"/*.ok.norm
-
-while IFS='|' read -r name libs; do
-	case "$name" in \#*|"") continue;; esac
-	if [ -n "$filter" ] && [ "$name" != "$filter" ]; then continue; fi
-	total=$((total + 1))
-	STA_TEST_DIR="$STA_ROOT/${name%%_*}/test"
-
-	tcl="$WORK/$name.tcl"
-	ys="$WORK/$name.ys"
-	out="$WORK/$name.out"
-	log="$WORK/$name.log"
-
-	if [ ! -f "$STA_TEST_DIR/$name.tcl" ] || [ ! -f "$STA_TEST_DIR/$name.ok" ]; then
-		echo "ERR  $name (missing test .tcl or .ok)"
-		err=$((err + 1))
-		continue
-	fi
-
-	{
-		echo "set ::ysta_libs {$libs}"
-		cat <<'EOF'
-proc ysta_load {verilog top} {
-	yosys tee -q design -reset
-	foreach lib $::ysta_libs { yosys tee -q read_liberty -lib -ignore_miss_func $lib }
-	yosys tee -q read_verilog $verilog
-	yosys tee -q hierarchy -top $top
-	yosys tee -q uniquify
-	yosys tee -q opensta_net -link
-}
-EOF
-		echo 'puts YSTA_BEGIN'
-		awk '
-			/^read_verilog / { vfile = $2; next }
-			/^link_design /  { print "ysta_load {" vfile "} {" $2 "}"; next }
-			{ print }
-		' "$STA_TEST_DIR/$name.tcl"
-		echo 'puts YSTA_END'
-	} > "$tcl"
-
-	{
-		echo "opensta_net"
-		echo "opensta_net -source $tcl"
-	} > "$ys"
-
-	# The rewrite must have replaced every link_design with a ysta_load
-	want=$(grep -c '^link_design ' "$STA_TEST_DIR/$name.tcl" || true)
-	got=$(grep -c '^ysta_load ' "$tcl" || true)
-	if [ "$want" != "$got" ]; then
-		echo "ERR  $name (design-load rewrite mismatch: $want link_design vs $got ysta_load)"
-		err=$((err + 1))
-		continue
-	fi
-
-	# Run from the STA test dir: tests source ../../test/helpers.tcl etc.
-	if ! (cd "$STA_TEST_DIR" && "$YOSYS" -m "$PLUGIN" -s "$ys" < /dev/null) > "$log" 2>&1; then
-		echo "ERR  $name (yosys failed, see $log)"
-		err=$((err + 1))
-		continue
-	fi
-
-	awk '/^YSTA_BEGIN$/{flag=1;next} /^YSTA_END$/{flag=0} flag' "$log" > "$out"
-	# Some .ok files are empty so the test prints nothing
-	if [ ! -s "$out" ] && [ -s "$STA_TEST_DIR/$name.ok" ]; then
-		echo "FAIL $name (empty extracted output)"
-		fail=$((fail + 1))
-		continue
-	fi
-
-	# Reader-specific messages have no equivalent in the yosys frontend path
-	grep -v '^Warning [0-9]*:.*Creating black box' "$STA_TEST_DIR/$name.ok" > "$WORK/$name.ok.norm"
-
-	if diff -u "$WORK/$name.ok.norm" "$out" > "$WORK/$name.diff" 2>&1; then
+fail=0
+for tcl in "$STA_ROOT"/{network,sdc,search}/test/*.tcl; do
+	name=$(basename "$tcl" .tcl)
+	[ $# -eq 0 ] || [[ " $* " == *" $name "* ]] || continue
+	(cd "$(dirname "$tcl")" && "$YOSYS" -m "$PLUGIN" -q -p "opensta_net -source $ROOT/conformance/load.tcl; opensta_net -source $name.tcl" < /dev/null) > "$OUT/$name.out" 2>&1
+	code=$?
+	if [[ $refused == *[[:space:]]$name[[:space:]]* ]]; then
+		[ $code -ne 0 ] && grep -q "Error: 2929" "$OUT/$name.out" && echo "REFUSED $name" && continue
+	elif [ $code -eq 0 ] && grep -v '^Warning [0-9]*:.*Creating black box' "${tcl%.tcl}.ok" | diff - "$OUT/$name.out" > "$OUT/$name.diff"; then
 		echo "PASS $name"
-		pass=$((pass + 1))
-	else
-		lines=$(grep -c -E '^[+-][^+-]' "$WORK/$name.diff")
-		echo "FAIL $name ($lines diff lines, see $WORK/$name.diff)"
-		fail=$((fail + 1))
+		continue
 	fi
-done < "$SPIKE_DIR/conformance/tests.conf"
-
-echo "---"
-echo "pass=$pass fail=$fail err=$err total=$total"
-if [ "$total" -eq 0 ] || [ $((pass + fail + err)) -ne "$total" ]; then
-	echo "ERROR: test accounting mismatch"
-	exit 2
-fi
-[ $((fail + err)) -eq 0 ]
+	echo "FAIL $name (exit $code, $OUT/$name.*)"
+	fail=$((fail + 1))
+done
+echo "$fail failed"
+[ $fail -eq 0 ]

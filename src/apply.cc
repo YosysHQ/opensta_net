@@ -50,7 +50,7 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		script = renderWords(words, empty_getters, ThroughContext::OutsideThrough);
 	std::string missing = missingNames(words);
 	std::string moved = namesMovedInside(command.words);
-	// an empty getter would widen a path exception
+	// OpenSTA drops, narrows or changes a command with an empty getter
 	if (empty_getters > 0) {
 		reason = "no object found for " + missing;
 		return false;

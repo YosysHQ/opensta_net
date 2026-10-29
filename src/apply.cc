@@ -107,7 +107,7 @@ std::string namesMovedInside(const std::vector<SdcWord> &words)
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		bool clock_input = clock && ref.facts.hier_dir == Netlist::Dir::Input;
+		bool clock_input = clock && ref.facts.hier_dir == Netlist::PortDir::Input;
 		if (ref.stillAsLeafPins() && ref.used_outside_through && !clock_input)
 			appendName(names, ref.name);
 	}

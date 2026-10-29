@@ -118,7 +118,7 @@ void hierPinLoads(std::vector<SdcWord> &words)
 			continue;
 		for (uint32_t index : words[i].refs) {
 			SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-			if (ref.stillAsLeafPins() && ref.facts.hier_dir == Netlist::Dir::Output)
+			if (ref.stillAsLeafPins() && ref.facts.hier_dir == Netlist::PortDir::Output)
 				ref.use_objects = ref.result.loads_beyond;
 			ref.inside_handled = true;
 		}
@@ -208,9 +208,9 @@ void clockImages(const std::vector<SdcWord> &words, ClockUse use)
 // where a clock use of a hierarchical pin goes when flatten removed the pin
 void pickClockImage(SdcObjectRef &ref, ClockUse use)
 {
-	using Dir = Netlist::Dir;
-	bool output_side = ref.facts.hier_dir == Dir::Output || use == ClockUse::GeneratedClockSource;
-	if (use == ClockUse::Clock && ref.facts.hier_dir == Dir::Input)
+	using PortDir = Netlist::PortDir;
+	bool output_side = ref.facts.hier_dir == PortDir::Output || use == ClockUse::GeneratedClockSource;
+	if (use == ClockUse::Clock && ref.facts.hier_dir == PortDir::Input)
 		ref.use_objects = loadsInside(ref);
 	else if (!ref.stillAsLeafPins())
 		return;
@@ -218,7 +218,7 @@ void pickClockImage(SdcObjectRef &ref, ClockUse use)
 		ref.use_objects = ref.result.loads_beyond;
 	else if (use != ClockUse::NetworkLatency && output_side && !ref.result.image_a_pins.empty())
 		ref.use_objects = ref.result.image_a_pins;
-	else if (use == ClockUse::SourceLatency && ref.facts.hier_dir == Dir::Input && !ref.result.image_y_pins.empty())
+	else if (use == ClockUse::SourceLatency && ref.facts.hier_dir == PortDir::Input && !ref.result.image_y_pins.empty())
 		ref.use_objects = ref.result.image_y_pins;
 	else
 		return;
@@ -232,12 +232,24 @@ std::vector<const void *> loadsInside(const SdcObjectRef &ref)
 	if (ref.stillAsLeafPins())
 		loads = ref.objects;
 	else
-		the_sta->views.view->loadsBehindPins(ref.objects, loads);
+		loadsBehindPins(ref.objects, loads);
 	if (loads.empty())
 		return ref.objects;
 	const std::vector<const void *> &image_y_pins = ref.result.image_y_pins;
 	loads.insert(loads.end(), image_y_pins.begin(), image_y_pins.end());
 	return loads;
+}
+
+// the leaf loads inside hierarchical pins
+void loadsBehindPins(const std::vector<const void *> &pins, std::vector<const void *> &loads)
+{
+	for (const void *object : pins) {
+		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
+		if (pin->term == nullptr)
+			continue;
+		std::vector<Netlist::Pin *> inner = the_sta->views.view->leafPins(pin->term->net, Netlist::WalkTarget::Loads);
+		loads.insert(loads.end(), inner.begin(), inner.end());
+	}
 }
 
 // write_sdc writes a clock name raw in braces, {a b} for the clock a b

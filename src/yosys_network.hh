@@ -11,7 +11,7 @@
 
 namespace ysta {
 
-using Netlist = Yosys::Netlist;
+namespace Netlist = Yosys::Netlist;
 using YInstance = Yosys::Netlist::Instance;
 using YPin = Yosys::Netlist::Pin;
 using YNet = Yosys::Netlist::Net;
@@ -27,13 +27,13 @@ std::string staPath(const std::vector<std::string> &path);
 std::string staInstName(const Netlist::Instance *inst);
 std::string staWireName(const Netlist::NetName &name);
 std::string staNetName(const Yosys::NetView &netlist, const Netlist::Net *net);
-sta::PortDirection *staDirection(Netlist::Dir dir);
+sta::PortDirection *staDirection(Netlist::PortDir dir);
 
 // Order of ConcreteNetwork
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
 // Scope body keys
-std::string pinKey(const Yosys::NetView &netlist, const Netlist::Pin *pin);
+std::string pinKey(const Netlist::Pin *pin);
 std::string netKey(const Yosys::NetView &netlist, const Netlist::Net *net);
 
 enum class ClaimKind : uint8_t {
@@ -89,7 +89,7 @@ struct Token {
 	const void *object;
 };
 
-class YosysNetwork : public sta::ConcreteNetwork, public Netlist::LeafCellModel {
+class YosysNetwork : public sta::ConcreteNetwork, public Netlist::CellLibrary {
 public:
 	using sta::ConcreteNetwork::name;
 	using sta::ConcreteNetwork::cell;
@@ -101,7 +101,7 @@ public:
 	bool linked() const;
 	size_t takeSharedNames();
 
-	bool ports(const YInstance &inst, std::vector<Netlist::PortShape> &out) override;
+	bool ports(const YInstance &inst, std::vector<Netlist::Port> &out) override;
 	bool isRegister(const YInstance &inst) override;
 	bool isClockPin(const YPin &pin) override;
 	bool isBuffer(const YInstance &inst) override;
@@ -174,7 +174,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeShapedCell(const std::string &name, StaCellKind kind, const std::vector<Netlist::PortShape> &shapes);
+	sta::ConcreteCell *makeShapedCell(const std::string &name, StaCellKind kind, const std::vector<Netlist::Port> &shapes);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
@@ -201,14 +201,14 @@ private:
 
 	// Cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
-	Yosys::IdMap<sta::ConcreteCell *> inst_cells_;
-	Yosys::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
+	Netlist::IdMap<sta::ConcreteCell *> inst_cells_;
+	Netlist::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
 
 	// Names, by instance id
-	Yosys::IdMap<detail::ChildNames> child_names_;
-	Yosys::IdMap<std::string> inst_names_;
-	Yosys::IdMap<detail::NetNames> net_names_;
-	Yosys::IdMap<detail::PinNames> pin_names_; // "D", "A[3]"
+	Netlist::IdMap<detail::ChildNames> child_names_;
+	Netlist::IdMap<std::string> inst_names_;
+	Netlist::IdMap<detail::NetNames> net_names_;
+	Netlist::IdMap<detail::PinNames> pin_names_; // "D", "A[3]"
 
 	// Link time: hierarchical instances per master, scope cells by master and body
 	std::map<std::string, int, std::less<>> master_uses_;

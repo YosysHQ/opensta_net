@@ -70,8 +70,8 @@ void closeEpoch()
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	if (the_sta->sync.running || !network->linked() || network->epochClosed())
 		return;
-	the_sta->views.view->invalidateCheck();
-	if (!the_sta->views.view->valid())
+	the_sta->views.view->recheck();
+	if (!the_sta->views.view->upToDate())
 		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
 	else if (!captureEpochConstraints())
 		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: they are lost.\n");
@@ -87,7 +87,7 @@ void openEpoch()
 
 bool needsSync()
 {
-	return the_sta->sync.rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->views.view->valid());
+	return the_sta->sync.rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->views.view->upToDate());
 }
 
 bool canBuild(Design *design)
@@ -110,7 +110,7 @@ void syncView(Design *design)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	YosysSta::SyncState &sync = the_sta->sync;
-	the_sta->views.view->invalidateCheck();
+	the_sta->views.view->recheck();
 	if (sync.running || (!network->linked() && !sync.rebuild_pending))
 		return;
 	if (!needsSync()) {
@@ -232,8 +232,12 @@ void dropView()
 		StaleProperties::keepOnly(the_sta->properties(), lastingObjects());
 		network->unlink();
 	}
-	if (views.view->built())
-		views.retired_views.push_back(std::exchange(views.view, views.view->retire()));
+	if (!views.view->built())
+		return;
+	views.view->retire();
+	std::unique_ptr<NetView> next = std::make_unique<NetView>();
+	next->takeEpochFrom(*views.view);
+	views.retired_views.push_back(std::exchange(views.view, std::move(next)));
 }
 
 bool linkView(Design *design, std::string &error)
@@ -244,11 +248,11 @@ bool linkView(Design *design, std::string &error)
 	NetView *view = the_sta->views.view.get();
 	network->attach(view);
 	try {
-		view->build(design, network);
+		view->build(design, {network});
 		network->link();
 	} catch (const sta::Exception &exception) {
 		network->unlink();
-		view->reset();
+		view->clear();
 		error = exception.what();
 		return false;
 	}

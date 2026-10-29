@@ -158,7 +158,7 @@ void EpochPass::execute(std::vector<std::string> args, Design *design)
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	the_sta->views.view->invalidateCheck();
+	the_sta->views.view->recheck();
 	if (the_sta->sync.autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
@@ -263,7 +263,7 @@ void linkOrSync(Design *design, const PassOptions &opt)
 		return;
 	}
 	// Passes may have run since the last call
-	the_sta->views.view->invalidateCheck();
+	the_sta->views.view->recheck();
 	if (!opt.sync && needsSync())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");

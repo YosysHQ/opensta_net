@@ -32,33 +32,17 @@ sta::PortDirection *staDirection(Netlist::PortDir dir);
 // Order of ConcreteNetwork
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
-// Scope body keys
-std::string pinKey(const Netlist::Pin *pin);
-std::string netKey(const Yosys::NetView &netlist, const Netlist::Net *net);
-
-enum class ClaimKind : uint8_t {
-	Canonical,
-	Alias
-};
-
-// Claim of an STA net name by the source bit that gives it. Canonical names
-// beat aliases, then the smallest bit wins
+// The net that an STA net name finds
 struct NameClaim {
 	Netlist::Net *net = nullptr;
-	ClaimKind kind = ClaimKind::Canonical;
-	std::string wire;
-	int index = 0;
-	bool operator<(const NameClaim &other) const;
+	bool canonical = false; // the name of the net, else an alias
 };
 using NetNames = std::map<std::string, NameClaim, std::less<>>;
 using ChildNames = std::map<std::string, Netlist::Instance *, std::less<>>;
 using PinNames = std::map<std::string, Netlist::Pin *, std::less<>>;
-NameClaim netClaim(const Yosys::NetView &netlist, Netlist::Net *net);
-void addClaim(NetNames &names, const std::string &name, const NameClaim &claim);
 size_t scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
-std::vector<std::string> childNames(const Netlist::Instance *scope, std::vector<std::string> &own);
-void scopeChildNames(const Netlist::Instance *scope, const std::vector<std::string> &names,
-                     const std::vector<std::string> &own, ChildNames &children);
+std::string staChildName(const Netlist::Instance *child, const std::string &name);
+std::vector<std::string> scopeChildNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, ChildNames &children);
 
 // Map value, or an empty one
 template <typename Map, typename K> const typename Map::mapped_type &lookup(const Map &map, const K &key)
@@ -178,8 +162,6 @@ private:
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
-	std::string scopeBody(const YInstance *scope) const;
-	void childLines(const YInstance *child, std::vector<std::string> &lines) const;
 	std::string freeCellName(const YInstance *scope) const;
 	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);

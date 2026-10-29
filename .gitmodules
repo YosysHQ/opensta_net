@@ -1,7 +1,7 @@
 [submodule "deps/yosys"]
 	path = deps/yosys
 	url = https://github.com/YosysHQ/yosys.git
-	branch = nella/network-api-core
+	branch = nella/netview-sync-rules
 [submodule "deps/OpenSTA"]
 	path = deps/OpenSTA
 	url = https://github.com/The-OpenROAD-Project/OpenSTA.git

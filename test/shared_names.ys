@@ -1,5 +1,0 @@
-# two nets with one sta name
-read_liberty -lib test/simple.lib
-read_verilog test/shared_names.v
-hierarchy -top top
-opensta_net -liberty test/simple.lib -link

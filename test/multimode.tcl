@@ -1,18 +1,16 @@
-# A sync carries every mode's constraints over, not only the command mode's,
+# a sync carries the constraints of each mode, not only of the command mode,
 # and finds a clock name of a mode that is not the current one
-yosys read_liberty -lib test/simple.lib
-yosys read_verilog test/sync.v
-yosys hierarchy -top top
-yosys opensta_net -liberty test/simple.lib -link
-read_sdc -mode mA test/multimode_a.sdc
-read_sdc -mode mB test/multimode_b.sdc
+source test/lib/check.tcl
+link_top test/data/sync.v
+read_sdc -mode mA test/data/multimode_a.sdc
+read_sdc -mode mB test/data/multimode_b.sdc
 set_mode mB
 create_clock -name {clk C} -period 4
 set_input_delay 1 -clock [get_clocks {{clk C}}] [get_ports in]
 set_mode mA
 yosys add -wire dummy top
-yosys opensta_net -sync
-puts "MODE [sta::cmd_mode_name]"
-puts "mA [get_full_name [all_clocks]]"
+check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sta::cmd_mode_name] mA
+check_eq [get_full_name [all_clocks]] clkA
 set_mode mB
-puts "mB [lsort [lmap clock [all_clocks] {get_name $clock}]]"
+check_eq [lsort [lmap clock [all_clocks] {get_name $clock}]] {{clk C} clkB}

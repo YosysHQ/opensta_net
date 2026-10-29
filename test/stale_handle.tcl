@@ -1,8 +1,7 @@
-yosys read_liberty -lib test/simple.lib
-yosys read_verilog test/simple.v
-yosys hierarchy -top top
-yosys opensta_net -liberty test/simple.lib -link
-set p [get_pins u_inv2/Y]
+# a handle of an earlier network is an error, not freed memory
+source test/lib/check.tcl
+link_top test/data/simple.v
+set pin [get_pins u_inv2/Y]
 yosys opensta_net -link
-if {[catch {get_full_name $p} msg]} { puts "CAUGHT $msg" } else { puts "TOOK $msg" }
-puts "FRESH [get_full_name [get_pins u_inv2/Y]]"
+check_eq [error_of {get_full_name $pin}] {Error: 2931 a handle of an earlier network names no object, get the object again.}
+check_eq [get_full_name [get_pins u_inv2/Y]] u_inv2/Y

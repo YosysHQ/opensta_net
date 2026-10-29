@@ -1,33 +1,34 @@
 # a pass start whose write_sdc fails keeps the constraints of the last epoch
 # end and the journal of the commands since
-yosys read_liberty -lib test/simple.lib
-yosys read_verilog test/simple.v
-yosys hierarchy -top top
-yosys opensta_net -liberty test/simple.lib -link
+source test/lib/check.tcl
+# no warning that the journal lacks commands
+yosys logger -werror {journal lacks}
+link_top test/data/simple.v
 create_clock -period 10 -name clk [get_ports clk]
 set_max_delay 9 -through [get_pins u_inv0/Y]
-rename write_sdc ysta_test_write_sdc
-proc write_sdc {args} { error "no write" }
+proc break_write_sdc {} {
+	rename write_sdc ysta_test_write_sdc
+	proc ::write_sdc {args} { error "no write" }
+}
+proc fix_write_sdc {} {
+	rename write_sdc {}
+	rename ysta_test_write_sdc write_sdc
+}
+break_write_sdc
 yosys add -wire dummy top
-puts "SYNC [catch {yosys opensta_net -sync}] [sta::network_is_linked]"
-rename write_sdc {}
-rename ysta_test_write_sdc write_sdc
+check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sta::network_is_linked] 1
+fix_write_sdc
 yosys opensta_net -sync
-puts "CLOCKS [llength [all_clocks]]"
+check_eq [llength [all_clocks]] 1
 # a command after a good epoch end, then a failing write: the constraints of
 # that epoch end and the command stay
 set_input_delay 2 -clock clk [get_ports in]
-rename write_sdc ysta_test_write_sdc
-proc write_sdc {args} { error "no write" }
+break_write_sdc
 yosys add -wire dummy2 top
-rename write_sdc {}
-rename ysta_test_write_sdc write_sdc
+fix_write_sdc
 yosys opensta_net -sync
-set file [file tempfile path]
-close $file
-write_sdc -no_timestamp $path
-set file [open $path]
-set text [read $file]
-close $file
-file delete $path
-puts "KEPT [llength [all_clocks]] [regexp -all {set_input_delay 2} $text] [regexp -all {u_inv0/Y} $text]"
+check_eq [llength [all_clocks]] 1
+set sdc [written_sdc]
+check_eq [count_lines $sdc {set_input_delay 2.0000 -clock [get_clocks {clk}] -add_delay [get_ports {in}]}] 1
+check_eq [count_lines $sdc {set_max_delay -through [get_pins {u_inv0/Y}] 9.0000}] 1

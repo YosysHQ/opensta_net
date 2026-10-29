@@ -1,8 +1,4 @@
 *.so
-conformance/work/
-test/*_out.sdc
-test/*_out.v
-test/flat_[12].sdc
-test/uniq_same.v
-test/uniq_diff.v
+conformance/out/
+test/out/
 src/trace.inc

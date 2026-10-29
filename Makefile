@@ -49,5 +49,4 @@ test: opensta_net.so
 .PHONY: clean
 clean:
 	rm -f opensta_net.so src/trace.inc
-	rm -rf conformance/work
-	rm -f test/*_out.sdc test/*_out.v test/flat_[12].sdc test/uniq_same.v test/uniq_diff.v
+	rm -rf conformance/out test/out

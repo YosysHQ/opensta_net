@@ -1,4 +1,4 @@
-// Object order (order.ys): statement order is not name order on purpose;
+// Object order (object_order.tcl): statement order is not name order on purpose.
 // m[0] and n have several loads, u2 has all bits of A on n.
 module sub(input clk, input d);
   DFF ra (.CLK(clk), .D(d), .Q());

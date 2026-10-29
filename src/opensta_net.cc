@@ -322,12 +322,12 @@ void evalTcl(const std::string &cmd)
 void setProtection(Design *design, const PassOptions &opt)
 {
 	if (opt.protect)
-		the_sta->epoch.protection = Protection::Barriers;
+		the_sta->epoch.track_mode = TrackMode::Barriers;
 	if (!opt.unprotect)
 		return;
-	the_sta->epoch.protection = Protection::AnchorsOnly;
+	the_sta->epoch.track_mode = TrackMode::AnchorsOnly;
 	the_sta->yosys_network->setEpochPhase(ysta::EpochPhase::Open);
-	the_sta->views.view->unprotect(design);
+	the_sta->epoch.tracker.unprotect(design);
 	syncView(design);
 }
 

@@ -17,7 +17,7 @@ void rewriteWords(std::vector<SdcWord> &words)
 	disableWireEdges(words);
 	hierPinLoads(words);
 	invertClock(words);
-	applyClockImages(words);
+	applyClockPins(words);
 	quoteClocks(words);
 }
 
@@ -41,12 +41,12 @@ void remapArcPorts(std::vector<SdcWord> &words)
 
 void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::string &text)
 {
-	for (const auto &[old_port, new_port, cell] : ref.result.port_renames) {
+	for (const auto &[old_port, new_port, inst] : ref.result.port_renames) {
 		if (old_port != name)
 			continue;
 		text = "{" + new_port + "}";
 		if (end == ArcEnd::From)
-			ref.use_objects.push_back(cell);
+			ref.use_objects.push_back(inst);
 	}
 }
 
@@ -100,8 +100,8 @@ void disableWireEdges(std::vector<SdcWord> &words)
 		if (!ref.stillAsLeafPins() && !ref.removedButLoadsKept())
 			continue;
 		std::string handles;
-		for (const void *pin : ref.result.loads_beyond)
-			handles += " " + swigHandleOf(SdcObjectRef::ObjectKind::Pin, pin);
+		for (const Netlist::Pin *pin : ref.result.loads_beyond)
+			handles += " " + swigHandleOf(SdcObjectRef::Kind::Pin, pin);
 		word.refs.clear();
 		word.kind = WordKind::Plain;
 		word.text = "[::ysta::wire_edges [list" + handles + "]]";
@@ -118,8 +118,8 @@ void hierPinLoads(std::vector<SdcWord> &words)
 			continue;
 		for (uint32_t index : words[i].refs) {
 			SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-			if (ref.stillAsLeafPins() && ref.facts.hier_dir == Netlist::PortDir::Output)
-				ref.use_objects = ref.result.loads_beyond;
+			if (ref.stillAsLeafPins() && ref.origin.hier_pin_dir == Netlist::PortDir::Output)
+				ref.use_objects = asObjects(ref.result.loads_beyond);
 			ref.inside_handled = true;
 		}
 	}
@@ -183,68 +183,67 @@ bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)
 	return false;
 }
 
-void applyClockImages(const std::vector<SdcWord> &words)
+void applyClockPins(const std::vector<SdcWord> &words)
 {
 	if (isClockCommand(words[0].text))
-		clockImages(words, ClockUse::Clock);
+		setClockPins(words, ClockUse::Clock);
 	else if (words[0].text == "set_clock_latency" && hasFlag(words, "-source"))
-		clockImages(words, ClockUse::SourceLatency);
+		setClockPins(words, ClockUse::SourceLatency);
 	else if (words[0].text == "set_clock_latency")
-		clockImages(words, ClockUse::NetworkLatency);
+		setClockPins(words, ClockUse::NetworkLatency);
 }
 
-void clockImages(const std::vector<SdcWord> &words, ClockUse use)
+void setClockPins(const std::vector<SdcWord> &words, ClockUse use)
 {
 	for (size_t i = 0; i < words.size(); i++) {
 		ClockUse word_use = use;
 		if (use == ClockUse::Clock && i > 0 && words[i - 1].text == "-source")
 			word_use = ClockUse::GeneratedClockSource;
 		for (uint32_t index : words[i].refs)
-			pickClockImage(the_sta->epoch.constraints.refs[index], word_use);
-		clockImages(words[i].nested_words, use);
+			pickClockPins(the_sta->epoch.constraints.refs[index], word_use);
+		setClockPins(words[i].nested_words, use);
 	}
 }
 
 // where a clock use of a hierarchical pin goes when flatten removed the pin
-void pickClockImage(SdcObjectRef &ref, ClockUse use)
+void pickClockPins(SdcObjectRef &ref, ClockUse use)
 {
 	using PortDir = Netlist::PortDir;
-	bool output_side = ref.facts.hier_dir == PortDir::Output || use == ClockUse::GeneratedClockSource;
-	if (use == ClockUse::Clock && ref.facts.hier_dir == PortDir::Input)
+	bool output_side = ref.origin.hier_pin_dir == PortDir::Output || use == ClockUse::GeneratedClockSource;
+	if (use == ClockUse::Clock && ref.origin.hier_pin_dir == PortDir::Input)
 		ref.use_objects = loadsInside(ref);
 	else if (!ref.stillAsLeafPins())
 		return;
 	else if (use == ClockUse::NetworkLatency && !ref.result.loads_beyond.empty())
-		ref.use_objects = ref.result.loads_beyond;
-	else if (use != ClockUse::NetworkLatency && output_side && !ref.result.image_a_pins.empty())
-		ref.use_objects = ref.result.image_a_pins;
-	else if (use == ClockUse::SourceLatency && ref.facts.hier_dir == PortDir::Input && !ref.result.image_y_pins.empty())
-		ref.use_objects = ref.result.image_y_pins;
+		ref.use_objects = asObjects(ref.result.loads_beyond);
+	else if (use != ClockUse::NetworkLatency && output_side && !ref.result.barrier_a_pins.empty())
+		ref.use_objects = asObjects(ref.result.barrier_a_pins);
+	else if (use == ClockUse::SourceLatency && ref.origin.hier_pin_dir == PortDir::Input && !ref.result.barrier_y_pins.empty())
+		ref.use_objects = asObjects(ref.result.barrier_y_pins);
 	else
 		return;
 	ref.inside_handled = true;
 }
 
-// the loads inside a hierarchical input pin, with the y pins of its image
+// the loads inside a hierarchical input pin, with the y pins of its barrier instance
 std::vector<const void *> loadsInside(const SdcObjectRef &ref)
 {
 	std::vector<const void *> loads;
 	if (ref.stillAsLeafPins())
-		loads = ref.objects;
+		loads = asObjects(ref.pins);
 	else
-		loadsBehindPins(ref.objects, loads);
+		loadsBehindPins(ref.pins, loads);
 	if (loads.empty())
-		return ref.objects;
-	const std::vector<const void *> &image_y_pins = ref.result.image_y_pins;
-	loads.insert(loads.end(), image_y_pins.begin(), image_y_pins.end());
+		return asObjects(ref.pins);
+	const std::vector<const Netlist::Pin *> &barrier_y_pins = ref.result.barrier_y_pins;
+	loads.insert(loads.end(), barrier_y_pins.begin(), barrier_y_pins.end());
 	return loads;
 }
 
 // the leaf loads inside hierarchical pins
-void loadsBehindPins(const std::vector<const void *> &pins, std::vector<const void *> &loads)
+void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<const void *> &loads)
 {
-	for (const void *object : pins) {
-		const Netlist::Pin *pin = static_cast<const Netlist::Pin *>(object);
+	for (const Netlist::Pin *pin : pins) {
 		if (pin->term == nullptr)
 			continue;
 		std::vector<Netlist::Pin *> inner = the_sta->views.view->leafPins(pin->term->net, Netlist::WalkTarget::Loads);

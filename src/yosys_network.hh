@@ -1,7 +1,7 @@
 #ifndef YOSYS_NETWORK_HH
 #define YOSYS_NETWORK_HH
 
-#include "kernel/netview.h"
+#include "kernel/nettrack.h"
 
 #include "sta/ConcreteNetwork.hh"
 
@@ -82,10 +82,10 @@ enum class StaCellKind : uint8_t {
 	Hierarchical
 };
 
-// a Port token holds the sta::Port, not its pin
+// a TopPort token holds the sta::Port, not its pin
 struct Token {
-	using ObjectKind = Yosys::TrackedRef::ObjectKind;
-	ObjectKind kind;
+	using Kind = Yosys::TrackedRef::Kind;
+	Kind kind;
 	const void *object;
 };
 
@@ -128,7 +128,7 @@ public:
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
 	void setTokenSink(std::vector<Token> *sink);
-	std::string token(Token::ObjectKind kind, const void *object) const;
+	std::string token(Token::Kind kind, const void *object) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, const sta::Port *port) const override;

@@ -61,7 +61,7 @@ bool captureEpochConstraints()
 	tclEval("set ::ysta::journal {}");
 	parseCommands(modes);
 	orderOverrides(epoch.constraints.commands);
-	the_sta->views.view->closeEpoch(epoch.constraints.view_refs, epoch.protection);
+	epoch.tracker.checkpoint(*the_sta->views.view, epoch.constraints.view_refs, epoch.track_mode);
 	return journaled;
 }
 
@@ -119,10 +119,19 @@ void syncView(Design *design)
 	}
 	if (!canBuild(design))
 		return;
-	sync.running = true;
+	SyncRunning running(sync.running);
 	network->setEpochPhase(ysta::EpochPhase::Open);
 	rebuildAndReapply(design);
-	sync.running = false;
+}
+
+SyncRunning::SyncRunning(bool &flag) : running(flag)
+{
+	running = true;
+}
+
+SyncRunning::~SyncRunning()
+{
+	running = false;
 }
 
 void rebuildAndReapply(Design *design)
@@ -235,9 +244,7 @@ void dropView()
 	if (!views.view->built())
 		return;
 	views.view->retire();
-	std::unique_ptr<NetView> next = std::make_unique<NetView>();
-	next->takeEpochFrom(*views.view);
-	views.retired_views.push_back(std::exchange(views.view, std::move(next)));
+	views.retired_views.push_back(std::exchange(views.view, std::make_unique<NetView>()));
 }
 
 bool linkView(Design *design, std::string &error)
@@ -248,7 +255,8 @@ bool linkView(Design *design, std::string &error)
 	NetView *view = the_sta->views.view.get();
 	network->attach(view);
 	try {
-		view->build(design, {network});
+		pool<const Cell *> barriers = the_sta->epoch.tracker.barrierInstances(design);
+		view->build(design, {network, &barriers});
 		network->link();
 	} catch (const sta::Exception &exception) {
 		network->unlink();
@@ -269,7 +277,7 @@ void linkDesign(Design *design)
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
 	the_sta->epoch.constraints = {};
-	the_sta->views.view->clearAnchors(design);
+	the_sta->epoch.tracker.clear(design);
 	tclEval("::ysta::clear");
 	the_sta->yosys_network->setEpochPhase(ysta::EpochPhase::Open);
 	if (!linkView(design, reason))

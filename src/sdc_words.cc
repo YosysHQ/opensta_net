@@ -11,7 +11,28 @@ namespace opensta_net {
 
 bool SdcObjectRef::stillAsLeafPins() const
 {
-	return result.found_as_leaf_pins && !inside_handled;
+	return result.flattened_hier_pin && !inside_handled;
+}
+
+std::vector<const void *> SdcObjectRef::objects() const
+{
+	switch (kind) {
+	case Kind::Instance: return asObjects(instances);
+	case Kind::Net: return asObjects(nets);
+	case Kind::Pin:
+	case Kind::TopPort: return asObjects(pins);
+	}
+	return {};
+}
+
+void SdcObjectRef::addObject(const void *object)
+{
+	switch (kind) {
+	case Kind::Instance: instances.push_back(static_cast<const Netlist::Instance *>(object)); return;
+	case Kind::Net: nets.push_back(static_cast<const Netlist::Net *>(object)); return;
+	case Kind::Pin:
+	case Kind::TopPort: pins.push_back(static_cast<const Netlist::Pin *>(object)); return;
+	}
 }
 
 std::vector<std::string> sdcCommands(const std::string &text)
@@ -140,7 +161,7 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 {
 	EpochConstraints &constraints = the_sta->epoch.constraints;
 	for (auto [kind, object] : tokensIn(inner)) {
-		if (kind == SdcObjectRef::ObjectKind::Port) {
+		if (kind == SdcObjectRef::Kind::TopPort) {
 			ysta::YosysNetwork *network = the_sta->yosys_network;
 			object = network->findPin(network->topInstance(), static_cast<const sta::Port *>(object));
 		}
@@ -148,7 +169,7 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 			continue;
 		word.refs.push_back(constraints.refs.size());
 		constraints.refs.push_back({{kind}, objectName(kind, object)});
-		constraints.refs.back().objects = {object};
+		constraints.refs.back().addObject(object);
 		constraints.view_refs.push_back(&constraints.refs.back());
 	}
 	if (!word.refs.empty())
@@ -167,7 +188,7 @@ void parseCommands(const SdcTextByMode &modes)
 			parseWords(text, command.words);
 			joinName(command.words);
 			if (isClockCommand(commandName(text)))
-				markRefs(command.words, RefMark::WantsImage);
+				markRefs(command.words, RefMark::KeepAsInstance);
 			command.log_text = tokensToNames(text);
 		}
 	}
@@ -208,9 +229,9 @@ void markRefs(const std::vector<SdcWord> &words, RefMark mark)
 	for (uint32_t index : refsOf(words)) {
 		SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
 		if (mark == RefMark::IsolateCell)
-			ref.request.isolate_cell = true;
+			ref.hints.keep_cell = true;
 		else
-			ref.request.wants_image = true;
+			ref.hints.keep_as_instance = true;
 	}
 }
 
@@ -297,27 +318,27 @@ std::string tokensToNames(const std::string &text)
 bool namesObject(const std::string &text)
 {
 	for (const auto &[kind, object] : tokensIn(text)) {
-		if (kind != SdcObjectRef::ObjectKind::Port)
+		if (kind != SdcObjectRef::Kind::TopPort)
 			return true;
 	}
 	return false;
 }
 
-std::string objectName(SdcObjectRef::ObjectKind kind, const void *object)
+std::string objectName(SdcObjectRef::Kind kind, const void *object)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	switch (kind) {
-	case SdcObjectRef::ObjectKind::Pin:
-	case SdcObjectRef::ObjectKind::Port: return network->pathName(static_cast<const sta::Pin *>(object));
-	case SdcObjectRef::ObjectKind::Cell: return network->pathName(static_cast<const sta::Instance *>(object));
-	case SdcObjectRef::ObjectKind::Net: return network->pathName(static_cast<const sta::Net *>(object));
+	case SdcObjectRef::Kind::Pin:
+	case SdcObjectRef::Kind::TopPort: return network->pathName(static_cast<const sta::Pin *>(object));
+	case SdcObjectRef::Kind::Instance: return network->pathName(static_cast<const sta::Instance *>(object));
+	case SdcObjectRef::Kind::Net: return network->pathName(static_cast<const sta::Net *>(object));
 	}
 	return "";
 }
 
 std::string tokenName(const ysta::Token &token)
 {
-	if (token.kind != SdcObjectRef::ObjectKind::Port)
+	if (token.kind != SdcObjectRef::Kind::TopPort)
 		return objectName(token.kind, token.object);
 	return the_sta->yosys_network->sta::ConcreteNetwork::name(static_cast<const sta::Port *>(token.object));
 }
@@ -342,7 +363,7 @@ std::string tclQuoted(const std::string &text)
 	return quoted;
 }
 
-std::string swigHandleOf(SdcObjectRef::ObjectKind kind, const void *object)
+std::string swigHandleOf(SdcObjectRef::Kind kind, const void *object)
 {
 	unsigned char bytes[sizeof(void *)];
 	memcpy(bytes, &object, sizeof(bytes));
@@ -351,11 +372,11 @@ std::string swigHandleOf(SdcObjectRef::ObjectKind kind, const void *object)
 		handle += stringf("%02x", byte);
 	const sta::Network *network = the_sta->sdcNetwork();
 	std::string name, getter;
-	if (kind == SdcObjectRef::ObjectKind::Pin) {
+	if (kind == SdcObjectRef::Kind::Pin) {
 		handle += "_p_Pin";
 		name = network->pathName(static_cast<const sta::Pin *>(object));
 		getter = "get_pins";
-	} else if (kind == SdcObjectRef::ObjectKind::Cell) {
+	} else if (kind == SdcObjectRef::Kind::Instance) {
 		handle += "_p_Instance";
 		name = network->pathName(static_cast<const sta::Instance *>(object));
 		getter = "get_cells";
@@ -375,31 +396,31 @@ std::string swigHandleOf(SdcObjectRef::ObjectKind kind, const void *object)
 // a -through net that flatten grew takes its pins in the old scope
 bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context)
 {
-	return context == ThroughContext::AfterThrough && !ref.result.through_pins.empty();
+	return context == ThroughContext::AfterThrough && !ref.result.old_scope_pins.empty();
 }
 
 // the exact pins beat the objects of a use, which beat the found objects
-const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
+std::vector<const void *> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
 {
 	if (rendersThroughPins(ref, context))
-		return ref.result.through_pins;
-	if (choice == PinChoice::ExactPins && !ref.result.exact_pins.empty())
-		return ref.result.exact_pins;
+		return asObjects(ref.result.old_scope_pins);
+	if (choice == PinChoice::ExactPins && !ref.result.own_pins.empty())
+		return asObjects(ref.result.own_pins);
 	if (!ref.use_objects.empty())
 		return ref.use_objects;
-	return ref.objects;
+	return ref.objects();
 }
 
 std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice)
 {
 	if (context == ThroughContext::OutsideThrough)
 		ref.used_outside_through = true;
-	SdcObjectRef::ObjectKind kind = ref.kind;
+	SdcObjectRef::Kind kind = ref.kind;
 	if (rendersThroughPins(ref, context))
-		kind = SdcObjectRef::ObjectKind::Pin;
+		kind = SdcObjectRef::Kind::Pin;
 	std::string handles;
 	for (const void *object : objectsToRender(ref, context, choice)) {
-		if (kind == SdcObjectRef::ObjectKind::Port)
+		if (kind == SdcObjectRef::Kind::TopPort)
 			handles += " [get_ports " + tclQuoted(objectName(kind, object)) + "]";
 		else
 			handles += " " + swigHandleOf(kind, object);
@@ -437,7 +458,7 @@ std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext
 	std::string handles;
 	for (uint32_t index : word.refs)
 		handles += refHandles(the_sta->epoch.constraints.refs[index], context, word.pin_choice);
-	empty_getters += handles.empty() && !onlyImagePins(word);
+	empty_getters += handles.empty() && !onlyBarrierInstancePins(word);
 	return "[list" + handles + "]";
 }
 

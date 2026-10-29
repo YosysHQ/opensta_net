@@ -11,16 +11,12 @@ namespace opensta_net {
 int resolveAndApply()
 {
 	EpochConstraints &constraints = the_sta->epoch.constraints;
-	ysta::YosysNetwork *network = the_sta->yosys_network;
 	for (SdcObjectRef &ref : constraints.refs) {
-		ref.request.top_port_pin = nullptr;
-		if (ref.kind == SdcObjectRef::ObjectKind::Port)
-			ref.request.top_port_pin = network->findPin(network->topInstance(), ref.name);
 		ref.used_outside_through = false;
 		ref.use_objects.clear();
 		ref.inside_handled = false;
 	}
-	the_sta->views.view->resolve(constraints.view_refs);
+	the_sta->epoch.tracker.resolve(*the_sta->views.view, constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
 	tclEval("set ::ysta::script [info script]; info script {}");
@@ -107,7 +103,7 @@ std::string namesMovedInside(const std::vector<SdcWord> &words)
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		bool clock_input = clock && ref.facts.hier_dir == Netlist::PortDir::Input;
+		bool clock_input = clock && ref.origin.hier_pin_dir == Netlist::PortDir::Input;
 		if (ref.stillAsLeafPins() && ref.used_outside_through && !clock_input)
 			appendName(names, ref.name);
 	}
@@ -117,7 +113,7 @@ std::string namesMovedInside(const std::vector<SdcWord> &words)
 bool anyMovedToDrivers(const std::vector<SdcWord> &words)
 {
 	for (uint32_t index : refsOf(words)) {
-		if (the_sta->epoch.constraints.refs[index].facts.moved_to_drivers)
+		if (the_sta->epoch.constraints.refs[index].origin.anchored_on_drivers)
 			return true;
 	}
 	return false;
@@ -126,17 +122,17 @@ bool anyMovedToDrivers(const std::vector<SdcWord> &words)
 bool foundAny(const std::vector<SdcWord> &words)
 {
 	for (uint32_t index : refsOf(words)) {
-		if (!the_sta->epoch.constraints.refs[index].objects.empty())
+		if (!the_sta->epoch.constraints.refs[index].objects().empty())
 			return true;
 	}
 	return false;
 }
 
-// a getter of image pins only, opensta ignores their clock attributes
-bool onlyImagePins(const SdcWord &word)
+// a getter of barrier instance pins only, opensta ignores their clock attributes
+bool onlyBarrierInstancePins(const SdcWord &word)
 {
 	for (uint32_t index : word.refs) {
-		if (!the_sta->epoch.constraints.refs[index].facts.is_image_pin)
+		if (!the_sta->epoch.constraints.refs[index].origin.on_barrier_instance)
 			return false;
 	}
 	return true;
@@ -147,7 +143,7 @@ std::string missingNames(const std::vector<SdcWord> &words)
 	std::string names;
 	for (uint32_t index : refsOf(words)) {
 		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		if (ref.objects.empty() && !ref.facts.is_image_pin)
+		if (ref.objects().empty() && !ref.origin.on_barrier_instance)
 			appendName(names, ref.name);
 	}
 	return names;

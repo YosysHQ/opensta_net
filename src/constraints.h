@@ -2,7 +2,7 @@
 #define CONSTRAINTS_H
 
 #include "kernel/yosys.h"
-#include "kernel/netview.h"
+#include "kernel/nettrack.h"
 
 #include <tcl.h>
 
@@ -16,10 +16,17 @@ using SdcTextByMode = Yosys::dict<std::string, std::string>;
 struct SdcObjectRef : Yosys::TrackedRef {
 	std::string name;
 	bool used_outside_through = false;
-	std::vector<const void *> use_objects = {}; // objects of a clock use or an arc, else objects
+	std::vector<const void *> use_objects = {}; // objects of a clock use or an arc, else the found objects
 	bool inside_handled = false;                // a rewrite took the leaf pins of a flattened hierarchical pin
 	bool stillAsLeafPins() const;
+	std::vector<const void *> objects() const; // the found objects of its kind, as sta handles
+	void addObject(const void *object);
 };
+
+template <typename T> std::vector<const void *> asObjects(const std::vector<const T *> &records)
+{
+	return {records.begin(), records.end()};
+}
 
 enum class WordKind : uint8_t {
 	Plain,
@@ -44,7 +51,7 @@ enum class ArcEnd : uint8_t {
 
 enum class RefMark : uint8_t {
 	IsolateCell,
-	WantsImage
+	KeepAsInstance
 };
 
 enum class ClockUse : uint8_t {
@@ -97,13 +104,13 @@ void orderOverrides(std::vector<SdcCommand> &commands);
 std::vector<ysta::Token> tokensIn(const std::string &text);
 std::string tokensToNames(const std::string &text);
 bool namesObject(const std::string &text);
-std::string objectName(SdcObjectRef::ObjectKind kind, const void *object);
+std::string objectName(SdcObjectRef::Kind kind, const void *object);
 std::string tokenName(const ysta::Token &token);
 std::vector<uint32_t> refsOf(const std::vector<SdcWord> &words);
 std::string tclQuoted(const std::string &text);
-std::string swigHandleOf(SdcObjectRef::ObjectKind kind, const void *object);
+std::string swigHandleOf(SdcObjectRef::Kind kind, const void *object);
 bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context);
-const std::vector<const void *> &objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice);
+std::vector<const void *> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice);
 std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice);
 std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, ThroughContext context);
 std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context);
@@ -120,11 +127,11 @@ void invertClock(std::vector<SdcWord> &words);
 std::string rotateEdges(const std::string &text);
 bool anyBehindNewLogic(const SdcWord &word);
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
-void applyClockImages(const std::vector<SdcWord> &words);
-void clockImages(const std::vector<SdcWord> &words, ClockUse use);
-void pickClockImage(SdcObjectRef &ref, ClockUse use);
+void applyClockPins(const std::vector<SdcWord> &words);
+void setClockPins(const std::vector<SdcWord> &words, ClockUse use);
+void pickClockPins(SdcObjectRef &ref, ClockUse use);
 std::vector<const void *> loadsInside(const SdcObjectRef &ref);
-void loadsBehindPins(const std::vector<const void *> &pins, std::vector<const void *> &loads);
+void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, std::vector<const void *> &loads);
 void quoteClocks(std::vector<SdcWord> &words);
 
 // apply
@@ -135,7 +142,7 @@ void appendName(std::string &names, const std::string &name);
 std::string namesMovedInside(const std::vector<SdcWord> &words);
 bool anyMovedToDrivers(const std::vector<SdcWord> &words);
 bool foundAny(const std::vector<SdcWord> &words);
-bool onlyImagePins(const SdcWord &word);
+bool onlyBarrierInstancePins(const SdcWord &word);
 std::string missingNames(const std::vector<SdcWord> &words);
 int tclInt(const std::string &script);
 

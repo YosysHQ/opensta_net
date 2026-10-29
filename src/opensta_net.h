@@ -2,7 +2,7 @@
 #define OPENSTA_NET_H
 
 #include "kernel/yosys.h"
-#include "kernel/netview.h"
+#include "kernel/nettrack.h"
 
 #include <tcl.h>
 
@@ -67,7 +67,8 @@ struct YosysSta : public sta::Sta {
 	struct EpochState {
 		EpochConstraints constraints;
 		std::vector<ysta::Token> tokens;
-		Yosys::Protection protection = Yosys::Protection::Barriers; // until -unprotect
+		Yosys::NetTracker tracker;
+		Yosys::TrackMode track_mode = Yosys::TrackMode::Barriers; // until -unprotect
 	};
 
 	struct SyncState {
@@ -94,6 +95,12 @@ public:
 	void connectPin(sta::Instance *inst, sta::LibertyPort *port, sta::Net *net) override;
 	void disconnectPin(sta::Pin *pin) override;
 	void makePortPin(const char *port_name, sta::PortDirection *dir) override;
+};
+
+struct SyncRunning {
+	bool &running;
+	explicit SyncRunning(bool &flag);
+	~SyncRunning();
 };
 
 struct PassOptions {

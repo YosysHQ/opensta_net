@@ -1,29 +1,13 @@
-# The Tcl part of opensta_net. bootTcl (opensta_net.cc) evaluates this file once, after it makes
-# the C commands ::ysta::before_edit (ends the epoch) and ::ysta::after_yosys (rechecks the view).
-#
-# State (record adds, clear empties all, clear_journal empties the journal):
-#   journal        {mode cmd} of each constraint command since the last epoch end or apply
-#   kept           {mode cmd} of each command that write_sdc does not write, or whose family has a kept command
-#   kept_families  {mode family} -> 1 for each family with a kept command
-#
-# Procs that C++ calls:
-#   clear          linkDesign, and rebuildAndReapply before the apply
-#   clear_journal  captureEpochConstraints, and resolveAndApply after the apply
-#   texts which    appendTraceTexts: {texts untexted} of kept (after write_sdc) or of the journal (rebuild,
-#                  failed write_sdc)
-#   kept_count     applyCommand: a warning of a command that is kept again loses nothing
-#   behind_inverter                invertClock (rewrite.cc)
-#   edges, start_edge, wire_edges  in the commands that a rebuild applies (sdc_words.cc, rewrite.cc)
+# Tcl side of opensta_net: guards, the constraint journal, apply helpers
 namespace eval ::ysta {
 	variable journal {}
 	variable kept {}
 	variable kept_families {}
-	# write_sdc does not write these commands and options
+	# not written by write_sdc
 	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
 		set_wire_load_selection_group set_pvt set_power_activity set_property}
 	variable unwritten_options {-network_latency_included -source_latency_included -probe -subtract_pin_load}
-	# name -> family, after a kept command the later commands of its family in its mode are kept too,
-	# so they apply in order
+	# a kept command keeps the later ones of its family
 	variable families {
 		set_input_delay in unset_input_delay in
 		set_output_delay out unset_output_delay out
@@ -33,13 +17,13 @@ namespace eval ::ysta {
 		set_power_activity power unset_power_activity power
 		set_disable_inferred_clock_gating icg unset_disable_inferred_clock_gating icg
 	}
-	# a rebuild drops the property values of these object types, so their set_property is kept
+	# set_property on these is kept
 	variable property_types {Pin Instance Net Clock Port}
 }
 
-# ---- Guards: wrapped, refused and traced commands
+# Guards
 
-# opensta crashes on an empty first argument of these commands, the wrapper skips such a call
+# skip an empty first argument, opensta crashes on it
 proc ::ysta::skip_empty {cmd first args} {
 	if {[llength $first]} { tailcall $cmd $first {*}$args }
 }
@@ -58,10 +42,9 @@ foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd 
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
 
-# ---- Journal: each constraint command goes to the journal, one that write_sdc does not write is kept too
+# ---- Journal
 
-# the leave trace of each constraint command: journal it, keep it when write_sdc does not write it
-# or when its family has a kept command
+# journal each command, keep the unwritten ones
 proc ::ysta::record {cmd code result op} {
 	variable journal
 	variable kept
@@ -74,7 +57,6 @@ proc ::ysta::record {cmd code result op} {
 	lappend journal [list $mode $cmd]
 	if {[catch {llength $cmd}]} return
 	set name [namespace tail [lindex $cmd 0]]
-	# only a listed command can be kept
 	if {$name ni $unwritten_cmds && ![dict exists $families $name]} return
 	set family {}
 	if {[dict exists $families $name]} { set family [list $mode [dict get $families $name]] }
@@ -90,8 +72,7 @@ proc ::ysta::clear {} {
 }
 proc ::ysta::clear_journal {} { set ::ysta::journal {} }
 proc ::ysta::kept_count {} { return [llength $::ysta::kept] }
-# {texts untexted} of the list which (kept or journal): texts maps each mode to the sdc text of its commands,
-# untexted counts the commands with no sdc text
+# {texts untexted} of kept or journal
 proc ::ysta::texts {which} {
 	set texts [dict create]
 	set untexted 0
@@ -102,7 +83,7 @@ proc ::ysta::texts {which} {
 	}
 	return [list $texts $untexted]
 }
-# 1 for a listed command, a listed option, or a disable of a hierarchical pin
+# 1 if write_sdc does not write it
 proc ::ysta::unwritten {name cmd} {
 	variable unwritten_cmds
 	variable unwritten_options
@@ -116,7 +97,7 @@ proc ::ysta::unwritten {name cmd} {
 	}
 	return 0
 }
-# an activity is relative to the clock period of the moment, a density stays
+# -activity as -density
 proc ::ysta::activity_as_density {cmd} {
 	if {[namespace tail [lindex $cmd 0]] ne "set_power_activity"} { return $cmd }
 	set at [lsearch -exact $cmd -activity]
@@ -127,7 +108,7 @@ proc ::ysta::activity_as_density {cmd} {
 	if {$at >= 0} { set cmd [lreplace $cmd $at $at+1] }
 	return $cmd
 }
-# the sta objects in a word, also in nested lists
+# the sta objects in a word
 proc ::ysta::objects {word} {
 	set objs {}
 	if {[catch {llength $word}]} { return {} }
@@ -140,7 +121,7 @@ proc ::ysta::objects {word} {
 	}
 	return $objs
 }
-# the command as sdc text, each object as a getter
+# the command as sdc text
 proc ::ysta::sdc_text {cmd} {
 	set words [list [namespace tail [lindex $cmd 0]]]
 	foreach word [lrange $cmd 1 end] {
@@ -152,7 +133,7 @@ proc ::ysta::sdc_text {cmd} {
 	}
 	return [join $words " "]
 }
-# a getter by name, at an epoch end the names are tokens
+# a getter by name
 proc ::ysta::getter {obj} {
 	set type [::sta::object_type $obj]
 	switch $type {
@@ -169,17 +150,16 @@ proc ::ysta::getter {obj} {
 	}
 	error "no getter for $type"
 }
-# record each constraint command, not the network edits and the mode, scene and unit commands
+# record the constraint commands
 foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
 	if {[info commands ::sta::$cmd] ne {}} { trace add execution ::sta::$cmd leave ::ysta::record }
 }
 
-# ---- Apply: procs for the rewrite rules and for the commands that a rebuild applies
+# Apply
 
-# replaces a [get_timing_edges -from -to] (renderWords): the timing edges of each pin pair (abc9 -lut maps a gate
-# to luts), else the wire edges into the -from pins: a cell with one output passes every path
+# the edges between the pins, else the wire edges into froms
 proc ::ysta::edges {froms tos} {
 	set edges {}
 	foreach from $froms {
@@ -190,8 +170,7 @@ proc ::ysta::edges {froms tos} {
 	}
 	return $edges
 }
-# a -rise_from or -fall_from moved to the exact pins (rewrite.cc): rise and fall swap behind an inverting edge
-# from the old signal
+# rise and fall swap behind an inverter
 proc ::ysta::start_edge {flag froms} {
 	foreach from $froms {
 		foreach edge [get_timing_edges -from $from] {
@@ -200,7 +179,7 @@ proc ::ysta::start_edge {flag froms} {
 	}
 	return $flag
 }
-# 1 when each arc of the edge inverts. The arcs show it also for a liberty without timing_sense
+# 1 if each arc inverts
 proc ::ysta::inverts {edge} {
 	set arcs [$edge timing_arcs]
 	foreach arc $arcs {
@@ -208,8 +187,7 @@ proc ::ysta::inverts {edge} {
 	}
 	return [expr {$arcs ne {}}]
 }
-# the wire edges into the pins: the loads of a disabled hierarchical pin that flatten removed (rewrite.cc),
-# the -from pins of a mapped arc (edges)
+# the wire edges into the pins
 proc ::ysta::wire_edges {pins} {
 	set edges {}
 	foreach pin $pins {
@@ -220,7 +198,7 @@ proc ::ysta::wire_edges {pins} {
 	if {$edges eq {}} { error "no wire edge into the pins" }
 	return $edges
 }
-# called by invertClock (rewrite.cc): 1 when each edge into each found pin inverts and comes from an exact pin
+# 1 if each edge into founds inverts and comes from an exact pin
 proc ::ysta::behind_inverter {founds exacts} {
 	set nets {}
 	foreach exact $exacts { lappend nets [get_full_name [get_nets -of_objects $exact]] }

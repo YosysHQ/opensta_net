@@ -1,10 +1,10 @@
-# opensta-adapter
+### opensta_net
 
-Yosys plugin that runs OpenSTA on the live design.
+OpenSTA network adapter for Yosys
 
 ```sh
-git clone --recurse-submodules git@github.com:hexratcc/opensta-adapter.git
-cd opensta-adapter
+git clone --recurse-submodules git@github.com:YosysHQ/opensta_net.git
+cd opensta_net
 nix-shell --run "make deps"   # build yosys and OpenSTA in deps/
 nix-shell --run "make"        # build opensta_net.so
 nix-shell --run "make test"   # test/run.sh and conformance/run.sh

@@ -3,9 +3,11 @@
 
 #include "kernel/nettrack.h"
 
+#include "sta/ConcreteLibrary.hh"
 #include "sta/ConcreteNetwork.hh"
 
 #include <map>
+#include <memory>
 #include <set>
 #include <unordered_map>
 
@@ -20,6 +22,7 @@ using YTerm = Yosys::Netlist::Term;
 namespace detail {
 
 constexpr std::string_view token_prefix = "__ysta_tok_";
+constexpr std::string_view stale_name = "\x01ysta_stale";
 
 // Names
 std::string staName(std::string_view raw);
@@ -112,6 +115,9 @@ public:
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
 	void setTokenSink(std::vector<Token> *sink);
+	// TODO: write_sdc names the nets of earlier views stale_name: OpenSTA keeps their resistances and voltages
+	void setStaleNames(bool on);
+	bool staleNet(const sta::Net *net) const;
 	std::string token(Token::Kind kind, const void *object) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
@@ -159,6 +165,7 @@ protected:
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
 	sta::ConcreteCell *makeShapedCell(const std::string &name, StaCellKind kind, const std::vector<Netlist::Port> &shapes);
+	void retireLibrary(sta::Library *library);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
@@ -179,7 +186,9 @@ private:
 	size_t shared_name_count_ = 0; // nets with the canonical name of another net
 	std::vector<Token> *token_sink_ = nullptr; // token mode when set
 	mutable std::unordered_map<const void *, size_t> token_index_;
+	bool stale_names_ = false;
 	void (*open_epoch_hook_)() = nullptr;
+	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_;
 
 	// Cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;

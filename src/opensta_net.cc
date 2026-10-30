@@ -164,6 +164,16 @@ int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 	return TCL_OK;
 }
 
+// ysta::stale_names on|off
+int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
+{
+	int on = 0;
+	if (objc != 2 || Tcl_GetBooleanFromObj(interp, objv[1], &on) != TCL_OK)
+		return TCL_ERROR;
+	the_sta->yosys_network->setStaleNames(on);
+	return TCL_OK;
+}
+
 bool tclFailure(const std::string &what, std::string &error)
 {
 	error = what + ": " + Tcl_GetStringResult(yosys_get_tcl_interp());
@@ -204,6 +214,7 @@ bool bootTcl(std::string &error)
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
+	Tcl_CreateObjCommand(interp, "ysta::stale_names", tclStaleNames, nullptr, nullptr);
 	if (tclEval(script))
 		return true;
 	error = Tcl_GetStringResult(interp);

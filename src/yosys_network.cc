@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "yosys_network.hh"
 
+#include <algorithm>
+
 #include "sta/Liberty.hh"
 #include "sta/PatternMatch.hh"
 #include "sta/PortDirection.hh"
@@ -229,6 +231,17 @@ void YosysNetwork::setTokenSink(std::vector<Token> *sink)
 	token_index_.clear();
 }
 
+void YosysNetwork::setStaleNames(bool on)
+{
+	stale_names_ = on;
+}
+
+bool YosysNetwork::staleNet(const sta::Net *net) const
+{
+	const YNet *record = reinterpret_cast<const YNet *>(net);
+	return stale_names_ && record->scope->view != view_;
+}
+
 // one stable token per object, write_sdc sorts by name
 std::string YosysNetwork::token(Token::Kind kind, const void *object) const
 {
@@ -262,6 +275,8 @@ std::string YosysNetwork::name(const sta::Port *port) const
 
 std::string YosysNetwork::pathName(const sta::Net *net) const
 {
+	if (staleNet(net))
+		return std::string(detail::stale_name);
 	if (token_sink_ != nullptr)
 		return token(Token::Kind::Net, net);
 	return sta::Network::pathName(net);
@@ -298,9 +313,9 @@ void YosysNetwork::link()
 
 void YosysNetwork::unlink()
 {
-	// Stub and scope cells die with the library
+	// the cells and ports outlive the link
 	if (design_lib_ != nullptr)
-		deleteLibrary(design_lib_);
+		retireLibrary(design_lib_);
 	design_lib_ = nullptr;
 	top_cell_ = nullptr;
 	type_cells_.clear();
@@ -466,6 +481,14 @@ sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, St
 	return reinterpret_cast<sta::ConcreteCell *>(scell);
 }
 
+void YosysNetwork::retireLibrary(sta::Library *library)
+{
+	sta::ConcreteLibrary *clib = reinterpret_cast<sta::ConcreteLibrary *>(library);
+	library_map_.erase(clib->name());
+	library_seq_.erase(std::ranges::find(library_seq_, clib));
+	retired_libs_.emplace_back(clib);
+}
+
 sta::Instance *YosysNetwork::topInstance() const
 {
 	if (!linked())
@@ -620,6 +643,8 @@ sta::Pin *YosysNetwork::pin(const sta::Term *term) const
 
 std::string YosysNetwork::name(const sta::Net *net) const
 {
+	if (staleNet(net))
+		return std::string(detail::stale_name);
 	return detail::staNetName(*view_, asNet(net));
 }
 
@@ -651,6 +676,9 @@ void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta
 
 sta::Instance *YosysNetwork::instance(const sta::Net *net) const
 {
+	// write_sdc sorts it
+	if (staleNet(net))
+		return topInstance();
 	return reinterpret_cast<sta::Instance *>(asNet(net)->scope);
 }
 

@@ -3,6 +3,7 @@ namespace eval ::ysta {
 	variable journal {}
 	variable kept {}
 	variable kept_families {}
+	variable hier_disables {}
 	# not written by write_sdc
 	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
 		set_wire_load_selection_group set_pvt set_power_activity set_property}
@@ -31,6 +32,53 @@ foreach cmd {set_clock_sense_cmd find_fanin_pins find_fanin_insts find_fanout_pi
 	if {[catch {rename ::sta::$cmd ::sta::ysta_$cmd} err]} { error "cannot wrap $cmd: $err" }
 	interp alias {} ::sta::$cmd {} ::ysta::skip_empty ::sta::ysta_$cmd
 }
+proc ::ysta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timestamp} {
+	# a pipe or terminal cannot be read back
+	set path $filename
+	if {[file exists $filename] && ![file isfile $filename] && ![file isdirectory $filename]} { close [file tempfile path] }
+	::ysta::stale_names 1
+	set failed [catch {::sta::ysta_write_sdc_cmd $path $mode $leaf $compatible $digits $gzip $no_timestamp} err options]
+	::ysta::stale_names 0
+	# an unknown mode writes no file
+	set written [expr {!$failed && [::sta::is_object [::sta::find_mode $mode]]}]
+	try {
+		if {$written && [file readable $path]} { ::ysta::drop_stale_lines $path $gzip }
+		if {$written && $path ne $filename} { ::ysta::copy_file $path $filename }
+	} finally {
+		if {$path ne $filename} { file delete $path }
+	}
+	if {$failed} { return -options $options $err }
+}
+# open reads a name that starts with | as a pipeline, file normalize makes it a path
+proc ::ysta::copy_file {from to} {
+	set in [open [file normalize $from] rb]
+	try {
+		set out [open [file normalize $to] wb]
+		try { fcopy $in $out } finally { close $out }
+	} finally {
+		close $in
+	}
+}
+proc ::ysta::drop_stale_lines {filename gzip} {
+	set channel [open [file normalize $filename] rb]
+	try {
+		if {$gzip} { zlib push gunzip $channel }
+		set text [read $channel]
+	} finally {
+		close $channel
+	}
+	if {[string first "\x01ysta_stale" $text] < 0} return
+	set lines [split $text \n]
+	set channel [open [file normalize $filename] wb]
+	try {
+		if {$gzip} { zlib push gzip $channel }
+		puts -nonewline $channel [join [lsearch -all -inline -not -glob $lines "*\x01ysta_stale*"] \n]
+	} finally {
+		close $channel
+	}
+}
+if {[catch {rename ::sta::write_sdc_cmd ::sta::ysta_write_sdc_cmd} err]} { error "cannot wrap write_sdc_cmd: $err" }
+interp alias {} ::sta::write_sdc_cmd {} ::ysta::write_sdc_cmd
 foreach {cmd why} {
 	read_verilog_cmd {read_verilog: network edits are not supported, edit the design in yosys.}
 	clear_network {clear_network: network edits are not supported, edit the design in yosys.}
@@ -71,6 +119,30 @@ proc ::ysta::clear {} {
 	set ::ysta::kept_families {}
 }
 proc ::ysta::clear_journal {} { set ::ysta::journal {} }
+# OpenSTA keeps a hierarchical pin disable as wire edges in a set that orders pins by id,
+# so each one is undone while its pins live, a sync applies it again
+# no network call here: it can sync, and the sync would miss this pin. A leaf pin is undone too, the clear drops it anyway
+proc ::ysta::record_hier_disable {cmd code result op} {
+	if {$code == 0} { lappend ::ysta::hier_disables [list [::sta::cmd_mode_name] [lindex $cmd 1]] }
+}
+trace add execution ::sta::disable_pin leave ::ysta::record_hier_disable
+# 1 if it changed the cmd mode
+proc ::ysta::undo_hier_disables {} {
+	set disables $::ysta::hier_disables
+	set ::ysta::hier_disables {}
+	set changed 0
+	foreach item $disables {
+		lassign $item mode pin
+		# a deleted mode took its disables along
+		if {![::sta::is_object [::sta::find_mode $mode]]} continue
+		if {$mode ne [::sta::cmd_mode_name]} {
+			::sta::set_cmd_mode $mode
+			set changed 1
+		}
+		catch {::sta::unset_disable_pin $pin}
+	}
+	return $changed
+}
 proc ::ysta::kept_count {} { return [llength $::ysta::kept] }
 # {texts untexted} of kept or journal
 proc ::ysta::texts {which} {

@@ -3,6 +3,7 @@
 #include "opensta_net.h"
 
 #include "sta/Mode.hh"
+#include "sta/Sdc.hh"
 
 USING_YOSYS_NAMESPACE
 

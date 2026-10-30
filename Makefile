@@ -8,7 +8,7 @@ STA_ROOT := $(abspath $(OPENSTA))
 YOSYS_HEADERS = $(wildcard $(YOSYS_BUILD)/share/include/kernel/*.h)
 
 STA_LIBS = $(STA_ROOT)/build/sta_swig.a $(STA_ROOT)/build/libOpenSTA.a
-STA_INC = -I$(STA_ROOT)/include -I$(STA_ROOT)/include/sta -I$(STA_ROOT)/build/include/sta -I$(STA_ROOT)/search
+STA_INC = -I$(STA_ROOT)/include -I$(STA_ROOT)/include/sta -I$(STA_ROOT)/build/include/sta
 
 SRCS = src/opensta_net.cc src/yosys_network.cc src/epoch.cc src/sdc_words.cc src/rewrite.cc src/apply.cc
 

@@ -372,6 +372,7 @@ void YosysNetwork::unlink()
 	type_cells_.clear();
 	inst_cells_.clear();
 	pin_ports_.clear();
+	pin_vertex_ids_.clear();
 	inst_records_.clear();
 	pin_records_.clear();
 	net_records_.clear();
@@ -679,12 +680,12 @@ sta::PortDirection *YosysNetwork::direction(const sta::Pin *pin) const
 
 sta::VertexId YosysNetwork::vertexId(const sta::Pin *pin) const
 {
-	return asPin(pin)->user;
+	return pin_vertex_ids_.get(asPin(pin)->id);
 }
 
 void YosysNetwork::setVertexId(sta::Pin *pin, sta::VertexId id)
 {
-	asPin(pin)->user = id;
+	pin_vertex_ids_[asPin(pin)->id] = id;
 }
 
 ObjectId YosysNetwork::id(const sta::Term *term) const

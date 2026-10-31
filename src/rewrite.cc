@@ -42,12 +42,12 @@ void remapArcPorts(std::vector<SdcWord> &words)
 
 void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::string &text)
 {
-	for (const auto &[old_port, new_port, inst] : ref.result.port_renames) {
+	for (const auto &[old_port, old_bit, pin] : ref.result.port_renames) {
 		if (old_port != name)
 			continue;
-		text = "{" + new_port + "}";
+		text = "{" + pin->port().name + "}";
 		if (end == ArcEnd::From)
-			ref.use_objects.push_back(handleOf(inst));
+			ref.use_objects.push_back(handleOf(pin->inst));
 	}
 }
 

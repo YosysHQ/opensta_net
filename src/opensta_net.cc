@@ -225,7 +225,7 @@ void wrapPasses()
 {
 	std::vector<Pass *> passes;
 	for (const auto &[name, pass] : pass_register)
-		if (dynamic_cast<EpochPass *>(pass) == nullptr)
+		if (dynamic_cast<EpochPass *>(pass) == nullptr && name != "opensta_net")
 			passes.push_back(pass);
 	for (Pass *pass : passes)
 		new EpochPass(pass);

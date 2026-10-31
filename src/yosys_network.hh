@@ -221,6 +221,7 @@ private:
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
 	Netlist::IdMap<sta::ConcreteCell *> inst_cells_;
 	Netlist::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
+	Netlist::IdMap<sta::VertexId> pin_vertex_ids_; // in the graph of this link
 
 	// Records of this link by id
 	Netlist::IdMap<YInstance *> inst_records_;

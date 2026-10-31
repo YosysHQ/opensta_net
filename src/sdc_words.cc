@@ -27,12 +27,28 @@ std::vector<const void *> SdcObjectRef::objects() const
 
 void SdcObjectRef::addObject(const void *object)
 {
+	ysta::YosysNetwork *network = the_sta->yosys_network;
 	switch (kind) {
-	case Kind::Instance: instances.push_back(static_cast<const Netlist::Instance *>(object)); return;
-	case Kind::Net: nets.push_back(static_cast<const Netlist::Net *>(object)); return;
+	case Kind::Instance: instances.push_back(network->asInst(static_cast<const sta::Instance *>(object))); return;
+	case Kind::Net: nets.push_back(network->asNet(static_cast<const sta::Net *>(object))); return;
 	case Kind::Pin:
-	case Kind::TopPort: pins.push_back(static_cast<const Netlist::Pin *>(object)); return;
+	case Kind::TopPort: pins.push_back(network->asPin(static_cast<const sta::Pin *>(object))); return;
 	}
+}
+
+const void *handleOf(const Netlist::Instance *inst)
+{
+	return the_sta->yosys_network->handle(inst);
+}
+
+const void *handleOf(const Netlist::Pin *pin)
+{
+	return the_sta->yosys_network->handle(pin);
+}
+
+const void *handleOf(const Netlist::Net *net)
+{
+	return the_sta->yosys_network->handle(net);
 }
 
 std::vector<std::string> sdcCommands(const std::string &text)

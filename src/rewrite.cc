@@ -47,7 +47,7 @@ void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::stri
 			continue;
 		text = "{" + new_port + "}";
 		if (end == ArcEnd::From)
-			ref.use_objects.push_back(inst);
+			ref.use_objects.push_back(handleOf(inst));
 	}
 }
 
@@ -102,7 +102,7 @@ void disableWireEdges(std::vector<SdcWord> &words)
 			continue;
 		std::string handles;
 		for (const Netlist::Pin *pin : ref.result.loads_beyond)
-			handles += " " + swigHandleOf(SdcObjectRef::Kind::Pin, pin);
+			handles += " " + swigHandleOf(SdcObjectRef::Kind::Pin, handleOf(pin));
 		word.refs.clear();
 		word.kind = WordKind::Plain;
 		word.text = "[::ysta::wire_edges [list" + handles + "]]";
@@ -236,7 +236,7 @@ std::vector<const void *> loadsInside(const SdcObjectRef &ref)
 		loadsBehindPins(ref.pins, loads);
 	if (loads.empty())
 		return asObjects(ref.pins);
-	const std::vector<const Netlist::Pin *> &barrier_y_pins = ref.result.barrier_y_pins;
+	std::vector<const void *> barrier_y_pins = asObjects(ref.result.barrier_y_pins);
 	loads.insert(loads.end(), barrier_y_pins.begin(), barrier_y_pins.end());
 	return loads;
 }
@@ -247,7 +247,8 @@ void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<
 	for (const Netlist::Pin *pin : pins) {
 		if (pin->term == nullptr)
 			continue;
-		std::vector<Netlist::Pin *> inner = the_sta->views.view->leafPins(pin->term->net, Netlist::WalkTarget::Loads);
+		std::vector<Netlist::Pin *> leaves = the_sta->views.view->leafPins(pin->term->net, Netlist::WalkTarget::Loads);
+		std::vector<const void *> inner = asObjects(leaves);
 		loads.insert(loads.end(), inner.begin(), inner.end());
 	}
 }

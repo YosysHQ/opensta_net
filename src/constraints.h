@@ -23,9 +23,18 @@ struct SdcObjectRef : Yosys::TrackedRef {
 	void addObject(const void *object);
 };
 
-template <typename T> std::vector<const void *> asObjects(const std::vector<const T *> &records)
+// a record as an sta handle
+const void *handleOf(const Yosys::Netlist::Instance *inst);
+const void *handleOf(const Yosys::Netlist::Pin *pin);
+const void *handleOf(const Yosys::Netlist::Net *net);
+
+template <typename T> std::vector<const void *> asObjects(const std::vector<T *> &records)
 {
-	return {records.begin(), records.end()};
+	std::vector<const void *> objects;
+	objects.reserve(records.size());
+	for (const T *record : records)
+		objects.push_back(handleOf(record));
+	return objects;
 }
 
 enum class WordKind : uint8_t {

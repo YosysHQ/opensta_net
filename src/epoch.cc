@@ -190,16 +190,12 @@ void undoHierPinDisables()
 void dropView()
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	YosysSta::ViewOwner &views = the_sta->views;
 	if (network->linked()) {
 		undoHierPinDisables();
 		the_sta->networkChanged();
 		network->unlink();
 	}
-	if (!views.view->built())
-		return;
-	views.view->retire();
-	views.retired_views.push_back(std::exchange(views.view, std::make_unique<NetView>()));
+	the_sta->views.view->clear();
 }
 
 bool linkView(Design *design, std::string &error)

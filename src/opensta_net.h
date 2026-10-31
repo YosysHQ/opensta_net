@@ -49,7 +49,6 @@ struct EpochPass : public Yosys::Pass {
 struct YosysSta : public sta::Sta {
 	struct ViewOwner {
 		std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
-		std::vector<std::unique_ptr<Yosys::NetView>> retired_views;
 	};
 
 	struct EpochState {

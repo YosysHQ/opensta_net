@@ -1,4 +1,4 @@
-### opensta_net
+## opensta_net
 
 OpenSTA network adapter for Yosys
 

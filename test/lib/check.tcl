@@ -122,11 +122,3 @@ proc written_sdc {} {
 	file delete $path
 	return [regsub -all {\s*\\\n\s*} $sdc " "]
 }
-
-# the commands that write_sdc does not write, the sync applies them again.
-# the only read of plugin internals (::ysta::texts), grouped by mode
-proc kept_cmds {} {
-	lassign [::ysta::texts kept] texts untexted
-	check_eq $untexted 0
-	return [string trimright [join [dict values $texts] {}] \n]
-}

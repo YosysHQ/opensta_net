@@ -6,8 +6,6 @@
 
 #include <tcl.h>
 
-#include <memory>
-
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
 
@@ -47,30 +45,20 @@ struct EpochPass : public Yosys::Pass {
 };
 
 struct YosysSta : public sta::Sta {
-	struct ViewOwner {
-		std::unique_ptr<Yosys::NetView> view = std::make_unique<Yosys::NetView>();
-	};
-
-	struct EpochState {
-		EpochConstraints constraints;
-		std::vector<ysta::Token> tokens;
-		Yosys::NetTracker tracker;
-		Yosys::TrackMode track_mode = Yosys::TrackMode::Barriers; // until -unprotect
-	};
-
-	struct SyncState {
-		bool autosync = false;
-		bool running = false;
-		bool rebuild_pending = false;
-		std::string last_unbuildable_reason;
-		size_t wrapped_pass_count = 0;
-	};
-
 	ysta::YosysNetwork *yosys_network = nullptr;
-	ViewOwner views;
-	EpochState epoch;
-	SyncState sync;
-public:
+	Yosys::NetView view;
+	// the constraints of the last epoch end
+	EpochConstraints constraints;
+	std::vector<ysta::Token> tokens;
+	Yosys::NetTracker tracker;
+	Yosys::TrackMode track_mode = Yosys::TrackMode::Barriers; // until -unprotect
+	// sync
+	bool autosync = false;
+	bool running = false;
+	bool rebuild_pending = false;
+	std::string last_unbuildable_reason;
+	size_t wrapped_pass_count = 0;
+
 	void makeReport() override;
 	void makeNetwork() override;
 	sta::Instance *makeInstance(const char *name, sta::LibertyCell *cell, sta::Instance *parent) override;
@@ -93,11 +81,6 @@ struct SyncRunning {
 struct PassOptions {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
 	bool link = false, sync = false, autosync = false, protect = false, unprotect = false;
-};
-
-enum class SourceKind : uint8_t {
-	Sdc,
-	Tcl
 };
 
 // Tcl
@@ -137,7 +120,6 @@ void bootSta();
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
 void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
-bool sourceFile(const std::string &file, SourceKind kind);
 void checkSourced(bool ok, const std::string &file);
 std::string unquote(const std::string &arg);
 void evalTcl(const std::string &cmd);

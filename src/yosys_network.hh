@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <unordered_map>
 
 namespace ysta {
 
@@ -18,7 +17,6 @@ namespace Netlist = Yosys::Netlist;
 using YInstance = Yosys::Netlist::Instance;
 using YPin = Yosys::Netlist::Pin;
 using YNet = Yosys::Netlist::Net;
-using YTerm = Yosys::Netlist::Term;
 
 namespace detail {
 
@@ -28,7 +26,6 @@ constexpr std::string_view stale_name = "\x01ysta_stale";
 // Names
 std::string staName(std::string_view raw);
 std::string staPath(const std::vector<std::string> &path);
-std::string staInstName(const Netlist::Instance *inst);
 std::string staWireName(const Netlist::NetName &name);
 std::string staNetName(const Yosys::NetView &netlist, const Netlist::Net *net);
 sta::PortDirection *staDirection(Netlist::PortDir dir);
@@ -36,33 +33,21 @@ sta::PortDirection *staDirection(Netlist::PortDir dir);
 // Order of ConcreteNetwork
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
-// Handle bits:
-// 63     1
-// 61-62  HandleKind
-// 32-60  generation
-// 0-31   record id
-enum class HandleKind : uint8_t {
-	Instance,
-	Pin,
-	Net,
-	Term
-};
-
-constexpr uint32_t handle_generation_mask = (1u << 29) - 1;
-uintptr_t handleValue(HandleKind kind, uint32_t generation, uint32_t id);
-uint32_t handleGeneration(const void *handle);
-
 // The net that an STA net name finds
 struct NameClaim {
 	Netlist::Net *net = nullptr;
 	bool canonical = false; // the name of the net, else an alias
 };
 using NetNames = std::map<std::string, NameClaim, std::less<>>;
+struct RankedClaim {
+	NameClaim claim;
+	std::string wire; // with index, orders the claims of one canonicity
+	int index;
+};
+using RankedClaims = std::map<std::string, RankedClaim>;
 using ChildNames = std::map<std::string, Netlist::Instance *, std::less<>>;
-using PinNames = std::map<std::string, Netlist::Pin *, std::less<>>;
+void claimName(RankedClaims &claims, const Netlist::NetName &name, Netlist::Net *net, bool canonical);
 size_t scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
-std::string staChildName(const Netlist::Instance *child, const std::string &name);
-std::vector<std::string> scopeChildNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, ChildNames &children);
 
 // Map value, or an empty one
 template <typename Map, typename K> const typename Map::mapped_type &lookup(const Map &map, const K &key)
@@ -76,25 +61,73 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 } // namespace detail
 
-enum class EpochPhase : uint8_t {
-	Open,
-	Closed
+// The sta object types a handle stands for
+template <typename T>
+concept StaObject = 
+	std::is_same_v<std::remove_const_t<T>, sta::Instance> || 
+	std::is_same_v<std::remove_const_t<T>, sta::Pin> ||
+	std::is_same_v<std::remove_const_t<T>, sta::Net> ||
+	std::is_same_v<std::remove_const_t<T>, sta::Term>;
+
+struct Handle {
+	enum class Kind : uint8_t { Instance, Pin, Net, Term };
+	static constexpr uint32_t generation_mask = (1u << 29) - 1;
+
+	// 63    1
+	// 61-62 kind
+	// 32-60 generation
+	// 0-31  record id
+	uint64_t bits = 0;
+public:
+	Handle() = default;
+	Handle(Kind kind, uint32_t generation, uint32_t id);
+	template <StaObject T> Handle(const T *object) : bits(reinterpret_cast<uintptr_t>(object)) {}
+	template <StaObject T> operator T *() const { return reinterpret_cast<T *>(bits); }
+	Kind kind() const;
+	uint32_t generation() const;
+	uint32_t id() const;
+	std::string swigName() const; // the swig object name in tcl
+	auto operator<=>(const Handle &) const = default;
 };
 
-enum class StaCellKind : uint8_t {
-	Leaf,
-	Hierarchical
-};
+constexpr Handle::Kind recordKind(const YInstance *) { return Handle::Kind::Instance; }
+constexpr Handle::Kind recordKind(const YPin *) { return Handle::Kind::Pin; }
+constexpr Handle::Kind recordKind(const YNet *) { return Handle::Kind::Net; }
+template <typename Record> constexpr Handle::Kind record_kind = recordKind(static_cast<const Record *>(nullptr));
 
-// a TopPort token holds the sta::Port, not its pin
+// a TopPort token holds the top pin
 struct Token {
 	using Kind = Yosys::TrackedRef::Kind;
 	Kind kind;
-	const void *object;
+	Handle handle;
+	auto operator<=>(const Token &) const = default;
 };
+
+namespace detail {
+
+// Iterator over a copied sequence
+template <typename T> class SeqIterator : public sta::Iterator<T> {
+public:
+	explicit SeqIterator(std::vector<T> seq) : seq_(std::move(seq)) {}
+	bool hasNext() override { return index_ < seq_.size(); }
+	T next() override { return seq_[index_++]; }
+
+private:
+	std::vector<T> seq_;
+	size_t index_ = 0;
+};
+
+template <typename T> sta::Iterator<T> *handleIterator(const std::vector<Handle> &handles)
+{
+	return new SeqIterator<T>(std::vector<T>(handles.begin(), handles.end()));
+}
+
+} // namespace detail
 
 class YosysNetwork : public sta::ConcreteNetwork, public Netlist::CellLibrary {
 public:
+	bool epoch_closed = false; // queries wait for the sync
+
 	using sta::ConcreteNetwork::name;
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
@@ -112,8 +145,6 @@ public:
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
-	void setEpochPhase(EpochPhase phase);
-	bool epochClosed() const;
 	void setOpenEpochHook(void (*hook)());
 
 	// Instance
@@ -135,11 +166,10 @@ public:
 	// TODO: write_sdc names the nets of earlier links stale_name: OpenSTA keeps their resistances and voltages
 	void setStaleNames(bool on);
 	bool staleNet(const sta::Net *net) const;
-	std::string token(Token::Kind kind, const void *object) const;
+	std::string token(Token::Kind kind, Handle handle) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, const sta::Port *port) const override;
-	sta::Pin *findPin(const sta::Instance *instance, const sta::LibertyPort *port) const override;
 	sta::InstanceChildIterator *childIterator(const sta::Instance *instance) const override;
 	sta::InstancePinIterator *pinIterator(const sta::Instance *instance) const override;
 	sta::InstanceNetIterator *netIterator(const sta::Instance *instance) const override;
@@ -179,19 +209,40 @@ public:
 	void refuseEdit(const char *what) const;
 
 	// Records
-	sta::Instance *handle(const YInstance *inst) const;
-	sta::Pin *handle(const YPin *pin) const;
-	sta::Net *handle(const YNet *net) const;
-	sta::Term *handle(const YTerm *term) const;
-	const YInstance *asInst(const sta::Instance *inst) const;
-	const YPin *asPin(const sta::Pin *pin) const;
-	const YNet *asNet(const sta::Net *net) const;
-	const YTerm *asTerm(const sta::Term *term) const;
+	// a term is the pin, by Kind::Term
+	template <typename Record> Handle handle(const Record *record, Handle::Kind kind = record_kind<Record>) const
+	{
+		if (record == nullptr)
+			return {};
+		return {kind, generation_, record->id};
+	}
+	template <typename Record> std::vector<Handle> handles(const std::vector<Record *> &records, Handle::Kind kind = record_kind<Record>) const
+	{
+		std::vector<Handle> result;
+		for (const Record *record : records)
+			result.push_back(handle(record, kind));
+		return result;
+	}
+	template <typename Record> const Record *recordOf(Handle handle, Handle::Kind kind = record_kind<Record>) const
+	{
+		if (handle.bits == 0)
+			return nullptr;
+		const Record *record;
+		if constexpr (std::is_same_v<Record, YInstance>)
+			record = view_->instanceById(handle.id());
+		else if constexpr (std::is_same_v<Record, YPin>)
+			record = view_->pinById(handle.id());
+		else
+			record = view_->netById(handle.id());
+		if (record == nullptr || handle.kind() != kind || handle.generation() != generation_)
+			refuseHandle();
+		return record;
+	}
 protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeShapedCell(const std::string &name, StaCellKind kind, const std::vector<Netlist::Port> &shapes);
+	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::Port> &shapes);
 	void retireLibrary(sta::Library *library);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	void buildTables(YInstance *scope);
@@ -199,20 +250,15 @@ private:
 	std::string freeCellName(const YInstance *scope) const;
 	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
-	const std::string &instName(const YInstance *inst) const;
 	void refuseHandle() const;
-	uint32_t handleId(const void *sta_handle, detail::HandleKind kind) const;
-	template <typename Record>
-	const Record *recordOf(const void *sta_handle, detail::HandleKind kind, const Netlist::IdMap<Record *> &records) const;
 private:
 	Yosys::NetView *view_ = nullptr;
 	uint32_t generation_ = 1;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
-	EpochPhase epoch_phase_ = EpochPhase::Open;
 	size_t shared_name_count_ = 0; // nets with the canonical name of another net
 	std::vector<Token> *token_sink_ = nullptr; // token mode when set
-	mutable std::unordered_map<const void *, size_t> token_index_;
+	mutable std::map<Token, size_t> token_index_;
 	bool stale_names_ = false;
 	void (*open_epoch_hook_)() = nullptr;
 	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_;
@@ -221,19 +267,12 @@ private:
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
 	Netlist::IdMap<sta::ConcreteCell *> inst_cells_;
 	Netlist::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
+	std::map<std::pair<uint32_t, const sta::ConcretePort *>, YPin *> port_pins_; // by instance id and port bit
 	Netlist::IdMap<sta::VertexId> pin_vertex_ids_; // in the graph of this link
-
-	// Records of this link by id
-	Netlist::IdMap<YInstance *> inst_records_;
-	Netlist::IdMap<YPin *> pin_records_;
-	Netlist::IdMap<YNet *> net_records_;
-	Netlist::IdMap<YTerm *> term_records_;
 
 	// Names, by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
-	Netlist::IdMap<std::string> inst_names_;
 	Netlist::IdMap<detail::NetNames> net_names_;
-	Netlist::IdMap<detail::PinNames> pin_names_; // "D", "A[3]"
 
 	// Link time: hierarchical instances per master, scope cells by master and body
 	std::map<std::string, int, std::less<>> master_uses_;

@@ -16,25 +16,18 @@ using SdcTextByMode = Yosys::dict<std::string, std::string>;
 struct SdcObjectRef : Yosys::TrackedRef {
 	std::string name;
 	bool used_outside_through = false;
-	std::vector<const void *> use_objects = {}; // objects of a clock use or an arc, else the found objects
+	std::vector<ysta::Handle> use_objects = {}; // objects of a clock use or an arc, else the found objects
 	bool inside_handled = false;                // a rewrite took the leaf pins of a flattened hierarchical pin
 	bool stillAsLeafPins() const;
-	std::vector<const void *> objects() const; // the found objects of its kind, as sta handles
-	void addObject(const void *object);
+	std::vector<ysta::Handle> objects() const; // the found objects of its kind
+	void addObject(ysta::Handle handle);
 };
 
-// a record as an sta handle
-const void *handleOf(const Yosys::Netlist::Instance *inst);
-const void *handleOf(const Yosys::Netlist::Pin *pin);
-const void *handleOf(const Yosys::Netlist::Net *net);
+ysta::YosysNetwork &staNetwork();
 
-template <typename T> std::vector<const void *> asObjects(const std::vector<T *> &records)
+template <typename T> std::vector<ysta::Handle> handlesOf(const std::vector<T *> &records)
 {
-	std::vector<const void *> objects;
-	objects.reserve(records.size());
-	for (const T *record : records)
-		objects.push_back(handleOf(record));
-	return objects;
+	return staNetwork().handles(records);
 }
 
 enum class WordKind : uint8_t {
@@ -75,7 +68,7 @@ struct SdcWord {
 	std::string text;
 	WordKind kind = WordKind::Plain;
 	std::vector<SdcWord> nested_words = {};
-	std::vector<uint32_t> refs = {};
+	std::vector<SdcObjectRef *> refs = {};
 	PinChoice pin_choice = PinChoice::FoundPins;
 };
 
@@ -110,16 +103,14 @@ void joinName(std::vector<SdcWord> &words);
 void markRefs(const std::vector<SdcWord> &words, RefMark mark);
 bool tightness(const SdcCommand &command, double &tight);
 void orderOverrides(std::vector<SdcCommand> &commands);
-std::vector<ysta::Token> tokensIn(const std::string &text);
-std::string tokensToNames(const std::string &text);
+std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names = nullptr);
 bool namesObject(const std::string &text);
-std::string objectName(SdcObjectRef::Kind kind, const void *object);
-std::string tokenName(const ysta::Token &token);
-std::vector<uint32_t> refsOf(const std::vector<SdcWord> &words);
+std::string objectName(const sta::Network *network, ysta::Handle handle);
+std::vector<SdcObjectRef *> refsOf(const std::vector<SdcWord> &words);
 std::string tclQuoted(const std::string &text);
-std::string swigHandleOf(SdcObjectRef::Kind kind, const void *object);
+std::string swigHandle(ysta::Handle handle);
 bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context);
-std::vector<const void *> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice);
+std::vector<ysta::Handle> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice);
 std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice);
 std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, ThroughContext context);
 std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context);
@@ -139,15 +130,14 @@ bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
 void applyClockPins(const std::vector<SdcWord> &words);
 void setClockPins(const std::vector<SdcWord> &words, ClockUse use);
 void pickClockPins(SdcObjectRef &ref, ClockUse use);
-std::vector<const void *> loadsInside(const SdcObjectRef &ref);
-void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, std::vector<const void *> &loads);
+std::vector<ysta::Handle> loadsInside(const SdcObjectRef &ref);
+void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, std::vector<ysta::Handle> &loads);
 void quoteClocks(std::vector<SdcWord> &words);
 
 // apply
 int resolveAndApply();
 bool applyCommand(const SdcCommand &command, std::string &reason);
 bool keptMeaning(const std::vector<SdcWord> &words, const std::string &moved, std::string &reason);
-void appendName(std::string &names, const std::string &name);
 std::string namesMovedInside(const std::vector<SdcWord> &words);
 bool anyMovedToDrivers(const std::vector<SdcWord> &words);
 bool foundAny(const std::vector<SdcWord> &words);

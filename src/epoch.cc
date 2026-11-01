@@ -44,10 +44,9 @@ bool writeAllModes(SdcTextByMode &result)
 // writes, parses and anchors the constraints, a failed write_sdc keeps the last constraints and the journal
 bool captureEpochConstraints()
 {
-	YosysSta::EpochState &epoch = the_sta->epoch;
 	SdcTextByMode modes;
-	epoch.tokens.clear();
-	the_sta->yosys_network->setTokenSink(&epoch.tokens);
+	the_sta->tokens.clear();
+	the_sta->yosys_network->setTokenSink(&the_sta->tokens);
 	bool written = writeAllModes(modes);
 	const char *list = "journal";
 	if (written)
@@ -55,51 +54,50 @@ bool captureEpochConstraints()
 	int untexted = appendTraceTexts(modes, list);
 	the_sta->yosys_network->setTokenSink(nullptr);
 	if (written)
-		epoch.constraints = {};
+		the_sta->constraints = {};
 	bool journaled = written || untexted == 0;
 	tclEval("::ysta::clear_journal");
 	parseCommands(modes);
-	orderOverrides(epoch.constraints.commands);
-	epoch.tracker.checkpoint(*the_sta->views.view, epoch.constraints.view_refs, epoch.track_mode);
+	orderOverrides(the_sta->constraints.commands);
+	the_sta->tracker.checkpoint(the_sta->view, the_sta->constraints.view_refs, the_sta->track_mode);
 	return journaled;
 }
 
 void closeEpoch()
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	if (the_sta->sync.running || !network->linked() || network->epochClosed())
+	if (the_sta->running || !network->linked() || network->epoch_closed)
 		return;
-	the_sta->views.view->recheck();
-	if (!the_sta->views.view->upToDate())
+	the_sta->view.recheck();
+	if (!the_sta->view.upToDate())
 		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
 	else if (!captureEpochConstraints())
 		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: they are lost.\n");
-	network->setEpochPhase(ysta::EpochPhase::Closed);
+	network->epoch_closed = true;
 }
 
 void openEpoch()
 {
-	bool closed = the_sta->yosys_network->epochClosed() || the_sta->sync.rebuild_pending;
+	bool closed = the_sta->yosys_network->epoch_closed || the_sta->rebuild_pending;
 	if (closed && yosys_design != nullptr)
 		syncView(yosys_design);
 }
 
 bool needsSync()
 {
-	return the_sta->sync.rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->views.view->upToDate());
+	return the_sta->rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->view.upToDate());
 }
 
 bool canBuild(Design *design)
 {
-	YosysSta::SyncState &sync = the_sta->sync;
 	std::string reason;
 	if (NetView::buildable(design, reason)) {
-		sync.last_unbuildable_reason.clear();
+		the_sta->last_unbuildable_reason.clear();
 		return true;
 	}
-	if (reason == sync.last_unbuildable_reason)
+	if (reason == the_sta->last_unbuildable_reason)
 		return false;
-	sync.last_unbuildable_reason = reason;
+	the_sta->last_unbuildable_reason = reason;
 	log_warning("opensta_net: cannot rebuild the STA network: %s. It stays unlinked until a sync succeeds.\n",
 	            reason.c_str());
 	return false;
@@ -108,18 +106,17 @@ bool canBuild(Design *design)
 void syncView(Design *design)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	YosysSta::SyncState &sync = the_sta->sync;
-	the_sta->views.view->recheck();
-	if (sync.running || (!network->linked() && !sync.rebuild_pending))
+	the_sta->view.recheck();
+	if (the_sta->running || (!network->linked() && !the_sta->rebuild_pending))
 		return;
 	if (!needsSync()) {
-		network->setEpochPhase(ysta::EpochPhase::Open);
+		network->epoch_closed = false;
 		return;
 	}
 	if (!canBuild(design))
 		return;
-	SyncRunning running(sync.running);
-	network->setEpochPhase(ysta::EpochPhase::Open);
+	SyncRunning running(the_sta->running);
+	network->epoch_closed = false;
 	rebuildAndReapply(design);
 }
 
@@ -141,12 +138,11 @@ void rebuildAndReapply(Design *design)
 	int untexted = appendTraceTexts(journal, "journal");
 	std::string error;
 	if (!linkView(design, error)) {
-		the_sta->sync.rebuild_pending = true;
-		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync succeeds.\n",
-		            error.c_str());
+		the_sta->rebuild_pending = true;
+		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync succeeds.\n", error.c_str());
 		return;
 	}
-	the_sta->sync.rebuild_pending = false;
+	the_sta->rebuild_pending = false;
 	// the apply keeps the unwritten commands again
 	tclEval("::ysta::clear");
 	parseCommands(journal);
@@ -180,8 +176,7 @@ void undoHierPinDisables()
 {
 	sta::Scene *cmd_scene = the_sta->cmdScene();
 	std::string cmd_mode = the_sta->cmdMode()->name();
-	tclEval("::ysta::undo_hier_disables");
-	if (std::string_view(Tcl_GetStringResult(yosys_get_tcl_interp())) != "1")
+	if (tclInt("::ysta::undo_hier_disables") != 1)
 		return;
 	the_sta->setCmdScene(cmd_scene);
 	the_sta->setCmdMode(cmd_mode);
@@ -195,7 +190,7 @@ void dropView()
 		the_sta->networkChanged();
 		network->unlink();
 	}
-	the_sta->views.view->clear();
+	the_sta->view.clear();
 }
 
 bool linkView(Design *design, std::string &error)
@@ -203,10 +198,10 @@ bool linkView(Design *design, std::string &error)
 	dropView();
 	auto t0 = std::chrono::steady_clock::now();
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	NetView *view = the_sta->views.view.get();
+	NetView *view = &the_sta->view;
 	network->attach(view);
 	try {
-		pool<const Cell *> barriers = the_sta->epoch.tracker.barrierInstances(design);
+		pool<const Cell *> barriers = the_sta->tracker.barrierInstances(design);
 		view->build(design, {network, &barriers});
 		network->link();
 	} catch (const sta::Exception &exception) {
@@ -227,10 +222,10 @@ void linkDesign(Design *design)
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
-	the_sta->epoch.constraints = {};
-	the_sta->epoch.tracker.clear(design);
+	the_sta->constraints = {};
+	the_sta->tracker.clear(design);
 	tclEval("::ysta::clear");
-	the_sta->yosys_network->setEpochPhase(ysta::EpochPhase::Open);
+	the_sta->yosys_network->epoch_closed = false;
 	if (!linkView(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
 }

@@ -10,13 +10,13 @@ namespace opensta_net {
 
 int resolveAndApply()
 {
-	EpochConstraints &constraints = the_sta->epoch.constraints;
+	EpochConstraints &constraints = the_sta->constraints;
 	for (SdcObjectRef &ref : constraints.refs) {
 		ref.used_outside_through = false;
 		ref.use_objects.clear();
 		ref.inside_handled = false;
 	}
-	the_sta->epoch.tracker.resolve(*the_sta->views.view, constraints.view_refs);
+	the_sta->tracker.resolve(the_sta->view, constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
 	std::string script = swapInfoScript("");
@@ -90,31 +90,23 @@ bool keptMeaning(const std::vector<SdcWord> &words, const std::string &moved, st
 	return true;
 }
 
-void appendName(std::string &names, const std::string &name)
-{
-	if (!names.empty())
-		names += " ";
-	names += name;
-}
-
 // refs that flatten moved inside, a -through or a clock on an input pin keeps its meaning
 std::string namesMovedInside(const std::vector<SdcWord> &words)
 {
 	bool clock = !words.empty() && isClockCommand(words[0].text);
 	std::string names;
-	for (uint32_t index : refsOf(words)) {
-		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		bool clock_input = clock && ref.origin.hier_pin_dir == Netlist::PortDir::Input;
-		if (ref.stillAsLeafPins() && ref.used_outside_through && !clock_input)
-			appendName(names, ref.name);
+	for (SdcObjectRef *ref : refsOf(words)) {
+		bool clock_input = clock && ref->origin.hier_pin_dir == Netlist::PortDir::Input;
+		if (ref->stillAsLeafPins() && ref->used_outside_through && !clock_input)
+			names += (names.empty() ? "" : " ") + ref->name;
 	}
 	return names;
 }
 
 bool anyMovedToDrivers(const std::vector<SdcWord> &words)
 {
-	for (uint32_t index : refsOf(words)) {
-		if (the_sta->epoch.constraints.refs[index].origin.anchored_on_drivers)
+	for (SdcObjectRef *ref : refsOf(words)) {
+		if (ref->origin.anchored_on_drivers)
 			return true;
 	}
 	return false;
@@ -122,8 +114,8 @@ bool anyMovedToDrivers(const std::vector<SdcWord> &words)
 
 bool foundAny(const std::vector<SdcWord> &words)
 {
-	for (uint32_t index : refsOf(words)) {
-		if (!the_sta->epoch.constraints.refs[index].objects().empty())
+	for (SdcObjectRef *ref : refsOf(words)) {
+		if (!ref->objects().empty())
 			return true;
 	}
 	return false;
@@ -132,8 +124,8 @@ bool foundAny(const std::vector<SdcWord> &words)
 // a getter of barrier instance pins only, opensta ignores their clock attributes
 bool onlyBarrierInstancePins(const SdcWord &word)
 {
-	for (uint32_t index : word.refs) {
-		if (!the_sta->epoch.constraints.refs[index].origin.on_barrier_instance)
+	for (SdcObjectRef *ref : word.refs) {
+		if (!ref->origin.on_barrier_instance)
 			return false;
 	}
 	return true;
@@ -142,10 +134,9 @@ bool onlyBarrierInstancePins(const SdcWord &word)
 std::string missingNames(const std::vector<SdcWord> &words)
 {
 	std::string names;
-	for (uint32_t index : refsOf(words)) {
-		const SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
-		if (ref.objects().empty() && !ref.origin.on_barrier_instance)
-			appendName(names, ref.name);
+	for (SdcObjectRef *ref : refsOf(words)) {
+		if (ref->objects().empty() && !ref->origin.on_barrier_instance)
+			names += (names.empty() ? "" : " ") + ref->name;
 	}
 	return names;
 }

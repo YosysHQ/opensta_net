@@ -14,41 +14,30 @@ bool SdcObjectRef::stillAsLeafPins() const
 	return result.flattened_hier_pin && !inside_handled;
 }
 
-std::vector<const void *> SdcObjectRef::objects() const
+std::vector<ysta::Handle> SdcObjectRef::objects() const
 {
 	switch (kind) {
-	case Kind::Instance: return asObjects(instances);
-	case Kind::Net: return asObjects(nets);
+	case Kind::Instance: return handlesOf(instances);
+	case Kind::Net: return handlesOf(nets);
 	case Kind::Pin:
-	case Kind::TopPort: return asObjects(pins);
+	case Kind::TopPort: return handlesOf(pins);
 	}
 	return {};
 }
 
-void SdcObjectRef::addObject(const void *object)
+void SdcObjectRef::addObject(ysta::Handle handle)
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
 	switch (kind) {
-	case Kind::Instance: instances.push_back(network->asInst(static_cast<const sta::Instance *>(object))); return;
-	case Kind::Net: nets.push_back(network->asNet(static_cast<const sta::Net *>(object))); return;
+	case Kind::Instance: instances.push_back(staNetwork().recordOf<Netlist::Instance>(handle)); return;
+	case Kind::Net: nets.push_back(staNetwork().recordOf<Netlist::Net>(handle)); return;
 	case Kind::Pin:
-	case Kind::TopPort: pins.push_back(network->asPin(static_cast<const sta::Pin *>(object))); return;
+	case Kind::TopPort: pins.push_back(staNetwork().recordOf<Netlist::Pin>(handle)); return;
 	}
 }
 
-const void *handleOf(const Netlist::Instance *inst)
+ysta::YosysNetwork &staNetwork()
 {
-	return the_sta->yosys_network->handle(inst);
-}
-
-const void *handleOf(const Netlist::Pin *pin)
-{
-	return the_sta->yosys_network->handle(pin);
-}
-
-const void *handleOf(const Netlist::Net *net)
-{
-	return the_sta->yosys_network->handle(net);
+	return *the_sta->yosys_network;
 }
 
 std::vector<std::string> sdcCommands(const std::string &text)
@@ -175,18 +164,14 @@ void parseSubstitution(const std::string &inner, SdcWord &word)
 
 void addGetterRefs(const std::string &inner, SdcWord &word)
 {
-	EpochConstraints &constraints = the_sta->epoch.constraints;
-	for (auto [kind, object] : tokensIn(inner)) {
-		if (kind == SdcObjectRef::Kind::TopPort) {
-			ysta::YosysNetwork *network = the_sta->yosys_network;
-			object = network->findPin(network->topInstance(), static_cast<const sta::Port *>(object));
-		}
-		if (object == nullptr)
+	EpochConstraints &constraints = the_sta->constraints;
+	for (auto [kind, handle] : tokensIn(inner)) {
+		if (handle.bits == 0)
 			continue;
-		word.refs.push_back(constraints.refs.size());
-		constraints.refs.push_back({{kind}, objectName(kind, object)});
-		constraints.refs.back().addObject(object);
-		constraints.view_refs.push_back(&constraints.refs.back());
+		SdcObjectRef &ref = constraints.refs.emplace_back(SdcObjectRef{{kind}, objectName(&staNetwork(), handle)});
+		ref.addObject(handle);
+		word.refs.push_back(&ref);
+		constraints.view_refs.push_back(&ref);
 	}
 	if (!word.refs.empty())
 		word.kind = WordKind::Getter;
@@ -198,14 +183,14 @@ void parseCommands(const SdcTextByMode &modes)
 		for (const std::string &text : sdcCommands(sdc)) {
 			if (commandName(text) == "current_design")
 				continue;
-			SdcCommand &command = the_sta->epoch.constraints.commands.emplace_back();
+			SdcCommand &command = the_sta->constraints.commands.emplace_back();
 			command.mode = mode;
 			command.text = text;
 			parseWords(text, command.words);
 			joinName(command.words);
 			if (isClockCommand(commandName(text)))
 				markRefs(command.words, RefMark::KeepAsInstance);
-			command.log_text = tokensToNames(text);
+			tokensIn(text, &command.log_text);
 		}
 	}
 }
@@ -252,12 +237,11 @@ void joinName(std::vector<SdcWord> &words)
 
 void markRefs(const std::vector<SdcWord> &words, RefMark mark)
 {
-	for (uint32_t index : refsOf(words)) {
-		SdcObjectRef &ref = the_sta->epoch.constraints.refs[index];
+	for (SdcObjectRef *ref : refsOf(words)) {
 		if (mark == RefMark::IsolateCell)
-			ref.hints.keep_cell = true;
+			ref->hints.keep_cell = true;
 		else
-			ref.hints.keep_as_instance = true;
+			ref->hints.keep_as_instance = true;
 	}
 }
 
@@ -303,78 +287,58 @@ void orderOverrides(std::vector<SdcCommand> &commands)
 		commands[places[i]] = std::move(sorted[i]);
 }
 
-std::vector<ysta::Token> tokensIn(const std::string &text)
+std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
 {
 	std::vector<ysta::Token> found;
-	const std::vector<ysta::Token> &tokens = the_sta->epoch.tokens;
-	size_t at = 0;
-	while ((at = text.find(ysta::detail::token_prefix, at)) != std::string::npos) {
-		at += ysta::detail::token_prefix.size();
-		size_t index = 0;
-		size_t digits = 0;
-		while (at < text.size() && isdigit(static_cast<unsigned char>(text[at]))) {
-			index = index * 10 + (text[at++] - '0');
-			digits++;
-		}
-		if (digits > 0 && index < tokens.size())
-			found.push_back(tokens[index]);
-	}
-	return found;
-}
-
-std::string tokensToNames(const std::string &text)
-{
-	const std::vector<ysta::Token> &tokens = the_sta->epoch.tokens;
-	std::string out;
+	const std::vector<ysta::Token> &tokens = the_sta->tokens;
 	size_t at = 0;
 	size_t next;
 	while ((next = text.find(ysta::detail::token_prefix, at)) != std::string::npos) {
-		out += text.substr(at, next - at);
-		size_t end = next + ysta::detail::token_prefix.size();
+		size_t from = at;
+		size_t digits = next + ysta::detail::token_prefix.size();
 		size_t index = 0;
-		while (end < text.size() && isdigit(static_cast<unsigned char>(text[end])))
-			index = index * 10 + (text[end++] - '0');
-		if (index < tokens.size())
-			out += tokenName(tokens[index]);
-		at = end;
+		for (at = digits; at < text.size() && isdigit(static_cast<unsigned char>(text[at])); at++)
+			index = index * 10 + (text[at] - '0');
+		bool known = at > digits && index < tokens.size();
+		if (known)
+			found.push_back(tokens[index]);
+		if (names == nullptr)
+			continue;
+		*names += text.substr(from, next - from);
+		if (known)
+			*names += objectName(&staNetwork(), tokens[index].handle);
+		else
+			*names += text.substr(next, at - next);
 	}
-	return out + text.substr(at);
+	if (names != nullptr)
+		*names += text.substr(at);
+	return found;
 }
 
 bool namesObject(const std::string &text)
 {
-	for (const auto &[kind, object] : tokensIn(text)) {
+	for (const auto &[kind, handle] : tokensIn(text)) {
 		if (kind != SdcObjectRef::Kind::TopPort)
 			return true;
 	}
 	return false;
 }
 
-std::string objectName(SdcObjectRef::Kind kind, const void *object)
+std::string objectName(const sta::Network *network, ysta::Handle handle)
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
-	switch (kind) {
-	case SdcObjectRef::Kind::Pin:
-	case SdcObjectRef::Kind::TopPort: return network->pathName(static_cast<const sta::Pin *>(object));
-	case SdcObjectRef::Kind::Instance: return network->pathName(static_cast<const sta::Instance *>(object));
-	case SdcObjectRef::Kind::Net: return network->pathName(static_cast<const sta::Net *>(object));
+	switch (handle.kind()) {
+	case ysta::Handle::Kind::Instance: return network->pathName(static_cast<const sta::Instance *>(handle));
+	case ysta::Handle::Kind::Net: return network->pathName(static_cast<const sta::Net *>(handle));
+	default: return network->pathName(static_cast<const sta::Pin *>(handle));
 	}
-	return "";
 }
 
-std::string tokenName(const ysta::Token &token)
+std::vector<SdcObjectRef *> refsOf(const std::vector<SdcWord> &words)
 {
-	if (token.kind != SdcObjectRef::Kind::TopPort)
-		return objectName(token.kind, token.object);
-	return the_sta->yosys_network->sta::ConcreteNetwork::name(static_cast<const sta::Port *>(token.object));
-}
-
-std::vector<uint32_t> refsOf(const std::vector<SdcWord> &words)
-{
-	std::vector<uint32_t> refs;
+	std::vector<SdcObjectRef *> refs;
 	for (const SdcWord &word : words) {
 		refs.insert(refs.end(), word.refs.begin(), word.refs.end());
-		std::vector<uint32_t> nested = refsOf(word.nested_words);
+		std::vector<SdcObjectRef *> nested = refsOf(word.nested_words);
 		refs.insert(refs.end(), nested.begin(), nested.end());
 	}
 	return refs;
@@ -389,34 +353,20 @@ std::string tclQuoted(const std::string &text)
 	return quoted;
 }
 
-std::string swigHandleOf(SdcObjectRef::Kind kind, const void *object)
+std::string swigHandle(ysta::Handle handle)
 {
-	unsigned char bytes[sizeof(void *)];
-	memcpy(bytes, &object, sizeof(bytes));
-	std::string handle = "_";
-	for (unsigned char byte : bytes)
-		handle += stringf("%02x", byte);
-	const sta::Network *network = the_sta->sdcNetwork();
-	std::string name, getter;
-	if (kind == SdcObjectRef::Kind::Pin) {
-		handle += "_p_Pin";
-		name = network->pathName(static_cast<const sta::Pin *>(object));
-		getter = "get_pins";
-	} else if (kind == SdcObjectRef::Kind::Instance) {
-		handle += "_p_Instance";
-		name = network->pathName(static_cast<const sta::Instance *>(object));
-		getter = "get_cells";
-	} else {
-		handle += "_p_Net";
-		name = network->pathName(static_cast<const sta::Net *>(object));
-		getter = "get_nets";
-	}
+	static const char *getters[] = {"get_cells", "get_pins", "get_nets"};
+	log_assert(handle.kind() != ysta::Handle::Kind::Term);
+	std::string name = handle.swigName();
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	Tcl_CmdInfo info;
 	// make the swig command of the handle
-	if (!Tcl_GetCommandInfo(interp, handle.c_str(), &info))
-		Tcl_EvalEx(interp, (getter + " -quiet " + tclQuoted(name)).c_str(), -1, TCL_EVAL_GLOBAL);
-	return handle;
+	if (!Tcl_GetCommandInfo(interp, name.c_str(), &info)) {
+		std::string object_name = objectName(the_sta->sdcNetwork(), handle);
+		std::string getter = getters[int(handle.kind())] + std::string(" -quiet ") + tclQuoted(object_name);
+		Tcl_EvalEx(interp, getter.c_str(), -1, TCL_EVAL_GLOBAL);
+	}
+	return name;
 }
 
 // a -through net that flatten grew takes its pins in the old scope
@@ -426,12 +376,12 @@ bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context)
 }
 
 // the exact pins beat the objects of a use, which beat the found objects
-std::vector<const void *> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
+std::vector<ysta::Handle> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
 {
 	if (rendersThroughPins(ref, context))
-		return asObjects(ref.result.old_scope_pins);
+		return handlesOf(ref.result.old_scope_pins);
 	if (choice == PinChoice::ExactPins && !ref.result.own_pins.empty())
-		return asObjects(ref.result.own_pins);
+		return handlesOf(ref.result.own_pins);
 	if (!ref.use_objects.empty())
 		return ref.use_objects;
 	return ref.objects();
@@ -441,15 +391,13 @@ std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choi
 {
 	if (context == ThroughContext::OutsideThrough)
 		ref.used_outside_through = true;
-	SdcObjectRef::Kind kind = ref.kind;
-	if (rendersThroughPins(ref, context))
-		kind = SdcObjectRef::Kind::Pin;
+	bool ports = ref.kind == SdcObjectRef::Kind::TopPort && !rendersThroughPins(ref, context);
 	std::string handles;
-	for (const void *object : objectsToRender(ref, context, choice)) {
-		if (kind == SdcObjectRef::Kind::TopPort)
-			handles += " [get_ports " + tclQuoted(objectName(kind, object)) + "]";
+	for (ysta::Handle handle : objectsToRender(ref, context, choice)) {
+		if (ports)
+			handles += " [get_ports " + tclQuoted(objectName(&staNetwork(), handle)) + "]";
 		else
-			handles += " " + swigHandleOf(kind, object);
+			handles += " " + swigHandle(handle);
 	}
 	return handles;
 }
@@ -482,8 +430,8 @@ std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, T
 std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context)
 {
 	std::string handles;
-	for (uint32_t index : word.refs)
-		handles += refHandles(the_sta->epoch.constraints.refs[index], context, word.pin_choice);
+	for (SdcObjectRef *ref : word.refs)
+		handles += refHandles(*ref, context, word.pin_choice);
 	empty_getters += handles.empty() && !onlyBarrierInstancePins(word);
 	return "[list" + handles + "]";
 }

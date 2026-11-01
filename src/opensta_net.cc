@@ -152,14 +152,14 @@ void EpochPass::execute(std::vector<std::string> args, Design *design)
 	closeEpoch();
 	inner->execute(std::move(args), design);
 	// A plugin load adds passes
-	if (pass_register.size() != the_sta->sync.wrapped_pass_count)
+	if (pass_register.size() != the_sta->wrapped_pass_count)
 		wrapPasses();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	the_sta->views.view->recheck();
-	if (the_sta->sync.autosync && yosys_design != nullptr)
+	the_sta->view.recheck();
+	if (the_sta->autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
 }
@@ -230,7 +230,7 @@ void wrapPasses()
 	for (Pass *pass : passes)
 		new EpochPass(pass);
 	Pass::init_register();
-	the_sta->sync.wrapped_pass_count = pass_register.size();
+	the_sta->wrapped_pass_count = pass_register.size();
 }
 
 void bootSta()
@@ -274,7 +274,7 @@ void linkOrSync(Design *design, const PassOptions &opt)
 		return;
 	}
 	// Passes may have run since the last call
-	the_sta->views.view->recheck();
+	the_sta->view.recheck();
 	if (!opt.sync && needsSync())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
@@ -295,14 +295,6 @@ void readLiberty(const std::string &file)
 	}
 	if (lib == nullptr)
 		log_cmd_error("OpenSTA: failed to read liberty file %s.\n", file.c_str());
-}
-
-bool sourceFile(const std::string &file, SourceKind kind)
-{
-	std::string quoted = "{" + file + "}";
-	if (kind == SourceKind::Sdc)
-		return tclEval("read_sdc " + quoted);
-	return tclEval("namespace eval ::sta {include_file " + quoted + " 0 0}");
 }
 
 void checkSourced(bool ok, const std::string &file)
@@ -333,12 +325,12 @@ void evalTcl(const std::string &cmd)
 void setProtection(Design *design, const PassOptions &opt)
 {
 	if (opt.protect)
-		the_sta->epoch.track_mode = TrackMode::Barriers;
+		the_sta->track_mode = TrackMode::Barriers;
 	if (!opt.unprotect)
 		return;
-	the_sta->epoch.track_mode = TrackMode::AnchorsOnly;
-	the_sta->yosys_network->setEpochPhase(ysta::EpochPhase::Open);
-	the_sta->epoch.tracker.unprotect(design);
+	the_sta->track_mode = TrackMode::AnchorsOnly;
+	the_sta->yosys_network->epoch_closed = false;
+	the_sta->tracker.unprotect(design);
 	syncView(design);
 }
 
@@ -398,14 +390,14 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 
 	bootSta();
 	if (opt.autosync)
-		the_sta->sync.autosync = true;
+		the_sta->autosync = true;
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
 	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
-		checkSourced(sourceFile(opt.sdc_file, SourceKind::Sdc), opt.sdc_file);
+		checkSourced(tclEval("read_sdc {" + opt.sdc_file + "}"), opt.sdc_file);
 	if (!opt.source_file.empty())
-		checkSourced(sourceFile(opt.source_file, SourceKind::Tcl), opt.source_file);
+		checkSourced(tclEval("namespace eval ::sta {include_file {" + opt.source_file + "} 0 0}"), opt.source_file);
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
 	setProtection(design, opt);

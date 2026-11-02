@@ -85,7 +85,7 @@ foreach {cmd why} {
 	network_changed {network_changed: it would clear the constraints, opensta_net -sync rebuilds the network.}
 	delete_all_memory {delete_all_memory: the STA instance belongs to opensta_net.}
 } { proc ::sta::$cmd {args} [list error "Error: 2929 $why"] }
-# recheck the view after an edit
+# autosync after an edit
 foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_yosys }
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }

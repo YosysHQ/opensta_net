@@ -259,7 +259,7 @@ std::string YosysNetwork::pathName(const sta::Net *net) const
 bool YosysNetwork::isLinked() const
 {
 	open_epoch_hook_();
-	return linked() && !epoch_closed && view_->upToDate();
+	return linked() && !epoch_closed;
 }
 
 void YosysNetwork::attach(Yosys::NetView *view)
@@ -277,9 +277,7 @@ void YosysNetwork::link()
 	top_cell_ = makeShapedCell(top->hdl_type, false, *top->ports);
 	inst_cells_[top->id] = top_cell_;
 	indexPins(top);
-	countMasters(top);
 	buildTables(top);
-	master_uses_.clear();
 	scope_cells_.clear();
 	if (pin_ports_.data.size() >= 0x40000000)
 		report_->error(2927, "link: too many pins for 30-bit object ids.");
@@ -299,7 +297,6 @@ void YosysNetwork::unlink()
 	pin_vertex_ids_.clear();
 	child_names_.clear();
 	net_names_.clear();
-	master_uses_.clear();
 	scope_cells_.clear();
 	clearNetDrvrPinMap();
 }
@@ -368,9 +365,7 @@ void YosysNetwork::buildTables(YInstance *scope)
 
 sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope)
 {
-	std::string key = scope->hdl_type;
-	if (master_uses_[scope->hdl_type] > 1)
-		key += "\n" + std::to_string(view_->bodyKey(scope));
+	std::string key = scope->hdl_type + "\n" + std::to_string(view_->bodyKey(scope));
 	auto [it, fresh] = scope_cells_.try_emplace(key, nullptr);
 	if (fresh)
 		it->second = makeShapedCell(freeCellName(scope), false, *scope->ports);
@@ -385,16 +380,6 @@ std::string YosysNetwork::freeCellName(const YInstance *scope) const
 	for (int n = 1; findCell(design_lib_, name) != nullptr; n++)
 		name = scope->type + "_" + std::to_string(n);
 	return name;
-}
-
-void YosysNetwork::countMasters(const YInstance *scope)
-{
-	for (const YInstance *child : scope->children) {
-		if (!child->isLeaf()) {
-			master_uses_[child->hdl_type]++;
-			countMasters(child);
-		}
-	}
 }
 
 sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const

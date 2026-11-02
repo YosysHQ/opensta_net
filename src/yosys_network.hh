@@ -248,7 +248,6 @@ private:
 	void buildTables(YInstance *scope);
 	sta::ConcreteCell *scopeCell(const YInstance *scope);
 	std::string freeCellName(const YInstance *scope) const;
-	void countMasters(const YInstance *scope);
 	void indexPins(YInstance *inst);
 	void refuseHandle() const;
 private:
@@ -274,8 +273,7 @@ private:
 	Netlist::IdMap<detail::ChildNames> child_names_;
 	Netlist::IdMap<detail::NetNames> net_names_;
 
-	// Link time: hierarchical instances per master, scope cells by master and body
-	std::map<std::string, int, std::less<>> master_uses_;
+	// Link time: scope cells by master and body
 	std::map<std::string, sta::ConcreteCell *, std::less<>> scope_cells_;
 };
 

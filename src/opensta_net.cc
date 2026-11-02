@@ -108,57 +108,14 @@ int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 	return TCL_OK;
 }
 
-EpochPass::EpochPass(Pass *inner) : Pass(inner->pass_name, inner->short_help, inner->location), inner(inner)
+void beforePass(Pass *pass, Design *)
 {
-	experimental_flag = inner->experimental_flag;
-	internal_flag = inner->internal_flag;
-	call_counter = inner->call_counter;
-	runtime_ns = inner->runtime_ns;
-}
-
-bool EpochPass::replace_existing_pass() const
-{
-	return true;
-}
-
-void EpochPass::help()
-{
-	inner->help();
-}
-
-bool EpochPass::formatted_help()
-{
-	return inner->formatted_help();
-}
-
-void EpochPass::clear_flags()
-{
-	inner->clear_flags();
-}
-
-void EpochPass::on_shutdown()
-{
-	inner->on_shutdown();
-}
-
-bool EpochPass::allow_garbage_collection_during_pass() const
-{
-	return inner->allow_garbage_collection_during_pass();
-}
-
-// Before each pass: the epoch ends
-void EpochPass::execute(std::vector<std::string> args, Design *design)
-{
-	closeEpoch();
-	inner->execute(std::move(args), design);
-	// A plugin load adds passes
-	if (pass_register.size() != the_sta->wrapped_pass_count)
-		wrapPasses();
+	if (pass->pass_name != "opensta_net")
+		closeEpoch();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	the_sta->view.recheck();
 	if (the_sta->autosync && yosys_design != nullptr)
 		syncView(yosys_design);
 	return TCL_OK;
@@ -221,18 +178,6 @@ bool bootTcl(std::string &error)
 	return false;
 }
 
-void wrapPasses()
-{
-	std::vector<Pass *> passes;
-	for (const auto &[name, pass] : pass_register)
-		if (dynamic_cast<EpochPass *>(pass) == nullptr && name != "opensta_net")
-			passes.push_back(pass);
-	for (Pass *pass : passes)
-		new EpochPass(pass);
-	Pass::init_register();
-	the_sta->wrapped_pass_count = pass_register.size();
-}
-
 void bootSta()
 {
 	if (the_sta != nullptr)
@@ -240,7 +185,7 @@ void bootSta()
 	std::string error;
 	if (!makeSta(error) || !bootTcl(error))
 		log_error("OpenSTA: %s\n", error.c_str());
-	wrapPasses();
+	Pass::pre_call_hooks.push_back(beforePass);
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 
@@ -274,7 +219,6 @@ void linkOrSync(Design *design, const PassOptions &opt)
 		return;
 	}
 	// Passes may have run since the last call
-	the_sta->view.recheck();
 	if (!opt.sync && needsSync())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");

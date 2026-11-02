@@ -48,14 +48,14 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 	std::string script = command.text;
 	if (!words.empty())
 		script = renderWords(words, empty_getters, ThroughContext::OutsideThrough);
-	std::string missing = missingNames(words);
-	std::string moved = namesMovedInside(command.words);
+	RefLosses rendered = refLosses(words);
+	RefLosses original = refLosses(command.words);
 	// OpenSTA drops, narrows or changes a command with an empty getter
 	if (empty_getters > 0) {
-		reason = "no object found for " + missing;
+		reason = "no object found for " + rendered.missing;
 		return false;
 	}
-	if (!refsOf(words).empty() && !foundAny(words)) {
+	if (!refsOf(words).empty() && !rendered.found) {
 		reason = "-unprotect removed the barrier that kept its hierarchical pin";
 		return false;
 	}
@@ -70,55 +70,37 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		reason = "applied with a warning";
 		return false;
 	}
-	if (!missing.empty()) {
-		reason = "applied without " + missing;
+	if (!rendered.missing.empty()) {
+		reason = "applied without " + rendered.missing;
 		return false;
 	}
-	return keptMeaning(command.words, moved, reason);
-}
-
-bool keptMeaning(const std::vector<SdcWord> &words, const std::string &moved, std::string &reason)
-{
-	if (anyMovedToDrivers(words)) {
+	if (original.to_drivers) {
 		reason = "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
 		return false;
 	}
-	if (!moved.empty()) {
-		reason = "applied, flatten moved it to the leaf pins inside: " + moved;
+	if (!original.moved.empty()) {
+		reason = "applied, flatten moved it to the leaf pins inside: " + original.moved;
 		return false;
 	}
 	return true;
 }
 
-// refs that flatten moved inside, a -through or a clock on an input pin keeps its meaning
-std::string namesMovedInside(const std::vector<SdcWord> &words)
+// a -through or a clock on an input pin that flatten moved inside keeps its meaning
+RefLosses refLosses(const std::vector<SdcWord> &words)
 {
 	bool clock = !words.empty() && isClockCommand(words[0].text);
-	std::string names;
+	RefLosses losses;
 	for (SdcObjectRef *ref : refsOf(words)) {
+		bool none = ref->objects().empty();
 		bool clock_input = clock && ref->origin.hier_pin_dir == Netlist::PortDir::Input;
+		losses.found |= !none;
+		losses.to_drivers |= ref->origin.anchored_on_drivers;
+		if (none && !ref->origin.on_barrier_instance)
+			losses.missing += (losses.missing.empty() ? "" : " ") + ref->name;
 		if (ref->stillAsLeafPins() && ref->used_outside_through && !clock_input)
-			names += (names.empty() ? "" : " ") + ref->name;
+			losses.moved += (losses.moved.empty() ? "" : " ") + ref->name;
 	}
-	return names;
-}
-
-bool anyMovedToDrivers(const std::vector<SdcWord> &words)
-{
-	for (SdcObjectRef *ref : refsOf(words)) {
-		if (ref->origin.anchored_on_drivers)
-			return true;
-	}
-	return false;
-}
-
-bool foundAny(const std::vector<SdcWord> &words)
-{
-	for (SdcObjectRef *ref : refsOf(words)) {
-		if (!ref->objects().empty())
-			return true;
-	}
-	return false;
+	return losses;
 }
 
 // a getter of barrier instance pins only, opensta ignores their clock attributes
@@ -129,16 +111,6 @@ bool onlyBarrierInstancePins(const SdcWord &word)
 			return false;
 	}
 	return true;
-}
-
-std::string missingNames(const std::vector<SdcWord> &words)
-{
-	std::string names;
-	for (SdcObjectRef *ref : refsOf(words)) {
-		if (ref->objects().empty() && !ref->origin.on_barrier_instance)
-			names += (names.empty() ? "" : " ") + ref->name;
-	}
-	return names;
 }
 
 int tclInt(const std::string &script)

@@ -1,4 +1,4 @@
-# opt_clean on a clean mapped design rewrites connections behind the Monitor
+# opt_clean on a clean mapped design rewrites connections
 # but changes no net: the view stays valid, no rebuild
 source test/lib/check.tcl
 yosys read_verilog deps/yosys/tests/functional/picorv32.v

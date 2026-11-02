@@ -79,6 +79,14 @@ struct SdcCommand {
 	std::vector<SdcWord> words;
 };
 
+// refs of a command that lost or changed their meaning
+struct RefLosses {
+	std::string missing; // found no object
+	std::string moved;   // flatten moved them inside
+	bool found = false;
+	bool to_drivers = false; // -unprotect moved them to the drivers
+};
+
 // the constraints of the last epoch end
 struct EpochConstraints {
 	std::vector<SdcCommand> commands;
@@ -137,12 +145,8 @@ void quoteClocks(std::vector<SdcWord> &words);
 // apply
 int resolveAndApply();
 bool applyCommand(const SdcCommand &command, std::string &reason);
-bool keptMeaning(const std::vector<SdcWord> &words, const std::string &moved, std::string &reason);
-std::string namesMovedInside(const std::vector<SdcWord> &words);
-bool anyMovedToDrivers(const std::vector<SdcWord> &words);
-bool foundAny(const std::vector<SdcWord> &words);
+RefLosses refLosses(const std::vector<SdcWord> &words);
 bool onlyBarrierInstancePins(const SdcWord &word);
-std::string missingNames(const std::vector<SdcWord> &words);
 int tclInt(const std::string &script);
 std::string swapInfoScript(const std::string &script);
 

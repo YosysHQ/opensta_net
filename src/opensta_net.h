@@ -31,19 +31,6 @@ struct YosysStaReport : public sta::ReportTcl {
 	size_t printString(const char *buffer, size_t length) override;
 };
 
-// track pass starts
-struct EpochPass : public Yosys::Pass {
-	Yosys::Pass *inner;
-	explicit EpochPass(Yosys::Pass *inner);
-	bool replace_existing_pass() const override;
-	void help() override;
-	bool formatted_help() override;
-	void clear_flags() override;
-	void on_shutdown() override;
-	bool allow_garbage_collection_during_pass() const override;
-	void execute(std::vector<std::string> args, Design *design) override;
-};
-
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	Yosys::NetView view;
@@ -57,7 +44,6 @@ struct YosysSta : public sta::Sta {
 	bool running = false;
 	bool rebuild_pending = false;
 	std::string last_unbuildable_reason;
-	size_t wrapped_pass_count = 0;
 
 	void makeReport() override;
 	void makeNetwork() override;
@@ -113,7 +99,7 @@ bool tclFailure(const std::string &what, std::string &error);
 bool evalStaInit(Tcl_Interp *interp);
 bool makeSta(std::string &error);
 bool bootTcl(std::string &error);
-void wrapPasses();
+void beforePass(Yosys::Pass *pass, Design *design);
 void bootSta();
 
 // opensta_net

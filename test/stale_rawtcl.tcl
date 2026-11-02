@@ -1,4 +1,4 @@
-# a design change without a Monitor event (delete of a wire), then STA
+# a design change (delete of a wire), then STA
 # queries from raw tcl: the pass start ended the epoch, so OpenSTA reads a
 # rebuilt network, not freed objects
 source test/lib/check.tcl

@@ -68,7 +68,6 @@ void closeEpoch()
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	if (the_sta->running || !network->linked() || network->epoch_closed)
 		return;
-	the_sta->view.recheck();
 	if (!the_sta->view.upToDate())
 		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
 	else if (!captureEpochConstraints())
@@ -106,15 +105,17 @@ bool canBuild(Design *design)
 void syncView(Design *design)
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	the_sta->view.recheck();
 	if (the_sta->running || (!network->linked() && !the_sta->rebuild_pending))
 		return;
 	if (!needsSync()) {
 		network->epoch_closed = false;
 		return;
 	}
-	if (!canBuild(design))
+	// queries see no network until a sync succeeds
+	if (!canBuild(design)) {
+		network->epoch_closed = true;
 		return;
+	}
 	SyncRunning running(the_sta->running);
 	network->epoch_closed = false;
 	rebuildAndReapply(design);

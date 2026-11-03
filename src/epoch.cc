@@ -78,8 +78,8 @@ void closeEpoch()
 void openEpoch()
 {
 	bool closed = the_sta->yosys_network->epoch_closed || the_sta->rebuild_pending;
-	if (closed && yosys_design != nullptr)
-		syncView(yosys_design);
+	if (closed && yosys_get_design() != nullptr)
+		syncView(yosys_get_design());
 }
 
 bool needsSync()

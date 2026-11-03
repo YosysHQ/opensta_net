@@ -116,8 +116,8 @@ void beforePass(Pass *pass, Design *)
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	if (the_sta->autosync && yosys_design != nullptr)
-		syncView(yosys_design);
+	if (the_sta->autosync && yosys_get_design() != nullptr)
+		syncView(yosys_get_design());
 	return TCL_OK;
 }
 

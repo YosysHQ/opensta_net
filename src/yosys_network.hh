@@ -168,6 +168,7 @@ public:
 	bool staleNet(const sta::Net *net) const;
 	std::string token(Token::Kind kind, Handle handle) const;
 	sta::Instance *findChild(const sta::Instance *parent, std::string_view name) const override;
+	void findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern, sta::InstanceSeq &matches) const override;
 	sta::Pin *findPin(const sta::Instance *instance, std::string_view port_name) const override;
 	sta::Pin *findPin(const sta::Instance *instance, const sta::Port *port) const override;
 	sta::InstanceChildIterator *childIterator(const sta::Instance *instance) const override;

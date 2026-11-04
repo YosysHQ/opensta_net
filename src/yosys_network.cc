@@ -500,6 +500,26 @@ sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_
 	return handle(detail::lookup(child_names_.get(recordOf<YInstance>(parent)->id), name));
 }
 
+// A pattern also matches the cell name of a flattened child, u.i0 for u\/i0
+void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern, sta::InstanceSeq &matches) const
+{
+	if (!pattern->hasWildcards()) {
+		if (sta::Instance *child = findChild(parent, pattern->pattern()); child != nullptr)
+			matches.push_back(child);
+		return;
+	}
+	const detail::ChildNames &names = child_names_.get(recordOf<YInstance>(parent)->id);
+	std::set<const YInstance *> matched;
+	for (const auto &[name, child] : names) {
+		if (pattern->match(name))
+			matched.insert(child);
+	}
+	for (const auto &[name, child] : names) {
+		if (name == detail::staName(child->unique_name) && matched.contains(child))
+			matches.push_back(handle(child));
+	}
+}
+
 sta::Pin *YosysNetwork::findPin(const sta::Instance *instance, std::string_view port_name) const
 {
 	const YInstance *inst = recordOf<YInstance>(instance);

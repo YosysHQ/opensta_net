@@ -6,7 +6,8 @@ namespace eval ::ysta {
 	variable hier_disables {}
 	# not written by write_sdc
 	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
-		set_wire_load_selection_group set_pvt set_power_activity set_property}
+		set_wire_load_selection_group set_pvt set_power_activity set_property
+		set_assigned_delay set_assigned_check set_assigned_transition}
 	variable unwritten_options {-network_latency_included -source_latency_included -probe -subtract_pin_load}
 	# a kept command keeps the later ones of its family
 	variable families {
@@ -119,6 +120,16 @@ proc ::ysta::clear {} {
 	set ::ysta::kept_families {}
 }
 proc ::ysta::clear_journal {} { set ::ysta::journal {} }
+# remove_delay_slew_annotations undoes the kept set_assigned_* commands
+proc ::ysta::drop_assigned {cmd code result op} {
+	if {$code != 0} return
+	set kept {}
+	foreach item $::ysta::kept {
+		if {![string match set_assigned_* [namespace tail [lindex $item 1 0]]]} { lappend kept $item }
+	}
+	set ::ysta::kept $kept
+}
+trace add execution ::sta::remove_delay_slew_annotations leave ::ysta::drop_assigned
 # OpenSTA keeps a hierarchical pin disable as wire edges in a set that orders pins by id,
 # so each one is undone while its pins live, a sync applies it again
 # no network call here: it can sync, and the sync would miss this pin. A leaf pin is undone too, the clear drops it anyway

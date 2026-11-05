@@ -19,6 +19,7 @@ void rewriteWords(std::vector<SdcWord> &words)
 	hierPinLoads(words);
 	invertClock(words);
 	applyClockPins(words);
+	singleReferencePin(words);
 	quoteClocks(words);
 }
 
@@ -54,7 +55,7 @@ void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::stri
 // a -to behind new logic (a mux before D): -through the old signal, -to the exact pins
 void splitEndpoints(std::vector<SdcWord> &words)
 {
-	static const pool<std::string> commands = {"set_false_path", "set_multicycle_path", "set_max_delay", "set_min_delay", "set_data_check"};
+	static const pool<std::string> commands = {"set_false_path", "set_multicycle_path", "set_max_delay", "set_min_delay", "set_data_check", "group_path"};
 	if (!commands.count(words[0].text))
 		return;
 	bool check = words[0].text == "set_data_check";
@@ -248,6 +249,20 @@ void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<
 		std::vector<Netlist::Pin *> leaves = the_sta->view.leafPins(pin->inner, Netlist::WalkTarget::Loads);
 		std::vector<ysta::Handle> inner = handlesOf(leaves);
 		loads.insert(loads.end(), inner.begin(), inner.end());
+	}
+}
+
+void singleReferencePin(const std::vector<SdcWord> &words)
+{
+	for (size_t i = 0; i + 1 < words.size(); i++) {
+		if (words[i].text != "-reference_pin")
+			continue;
+		for (SdcObjectRef *ref : words[i + 1].refs) {
+			std::vector<ysta::Handle> pins = objectsToRender(*ref, ThroughContext::OutsideThrough, words[i + 1].pin_choice);
+			if (pins.size() > 1)
+				ref->use_objects = {pins.front()};
+			ref->inside_handled = true;
+		}
 	}
 }
 

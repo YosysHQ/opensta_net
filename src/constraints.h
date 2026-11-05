@@ -140,6 +140,7 @@ void setClockPins(const std::vector<SdcWord> &words, ClockUse use);
 void pickClockPins(SdcObjectRef &ref, ClockUse use);
 std::vector<ysta::Handle> loadsInside(const SdcObjectRef &ref);
 void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, std::vector<ysta::Handle> &loads);
+void singleReferencePin(const std::vector<SdcWord> &words);
 void quoteClocks(std::vector<SdcWord> &words);
 
 // apply

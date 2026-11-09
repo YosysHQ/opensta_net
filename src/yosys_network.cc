@@ -181,9 +181,11 @@ bool YosysNetwork::linked() const
 	return top_cell_ != nullptr;
 }
 
-size_t YosysNetwork::takeSharedNames()
+Yosys::NetView &YosysNetwork::view() const
 {
-	return std::exchange(shared_name_count_, 0);
+	if (!linked())
+		refuseHandle();
+	return *view_;
 }
 
 void YosysNetwork::setOpenEpochHook(void (*hook)())
@@ -262,25 +264,24 @@ bool YosysNetwork::isLinked() const
 	return linked() && !epoch_closed;
 }
 
-void YosysNetwork::attach(Yosys::NetView *view)
+size_t YosysNetwork::link(std::unique_ptr<Yosys::NetView> view)
 {
-	view_ = view;
+	log_assert(!linked());
 	generation_ = (generation_ + 1) & Handle::generation_mask;
-	// Named as OpenSTA's verilog reader library
+	view_ = std::move(view);
+	// named as OpenSTA's verilog reader library
+	// null here unless a link threw before top_cell_ and we skipped unlink()
 	if (design_lib_ == nullptr)
 		design_lib_ = makeLibrary("verilog", "");
-}
-
-void YosysNetwork::link()
-{
 	YInstance *top = view_->top();
 	top_cell_ = makeShapedCell(top->hdl_type, false, *top->ports);
 	inst_cells_[top->id] = top_cell_;
 	indexPins(top);
-	buildTables(top);
-	scope_cells_.clear();
+	detail::ScopeCells scope_cells;
+	size_t shared_names = buildTables(top, scope_cells);
 	if (pin_ports_.data.size() >= 0x40000000)
 		report_->error(2927, "link: too many pins for 30-bit object ids.");
+	return shared_names;
 }
 
 void YosysNetwork::unlink()
@@ -297,7 +298,7 @@ void YosysNetwork::unlink()
 	pin_vertex_ids_.clear();
 	child_names_.clear();
 	net_names_.clear();
-	scope_cells_.clear();
+	view_.reset();
 	clearNetDrvrPinMap();
 }
 
@@ -345,7 +346,7 @@ bool YosysNetwork::isBuffer(const YInstance &inst)
 	return cell != nullptr && cell->isBuffer();
 }
 
-void YosysNetwork::buildTables(YInstance *scope)
+size_t YosysNetwork::buildTables(YInstance *scope, detail::ScopeCells &scope_cells)
 {
 	// the cell name stays an alias
 	detail::ChildNames &names = child_names_[scope->id];
@@ -353,20 +354,21 @@ void YosysNetwork::buildTables(YInstance *scope)
 		names[detail::staName(child->unique_name)] = child;
 		names.emplace(detail::staName(child->name), child);
 	}
+	size_t shared_names = 0;
 	for (YInstance *child : scope->children) {
 		if (!child->isLeaf()) {
-			buildTables(child);
-			inst_cells_[child->id] = scopeCell(child);
+			shared_names += buildTables(child, scope_cells);
+			inst_cells_[child->id] = scopeCell(child, scope_cells);
 		}
 		indexPins(child);
 	}
-	shared_name_count_ += detail::scopeNetNames(*view_, scope, net_names_[scope->id]);
+	return shared_names + detail::scopeNetNames(*view_, scope, net_names_[scope->id]);
 }
 
-sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope)
+sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope, detail::ScopeCells &scope_cells)
 {
 	std::string key = scope->hdl_type + "\n" + std::to_string(view_->bodyKey(scope));
-	auto [it, fresh] = scope_cells_.try_emplace(key, nullptr);
+	auto [it, fresh] = scope_cells.try_emplace(key, nullptr);
 	if (fresh)
 		it->second = makeShapedCell(freeCellName(scope), false, *scope->ports);
 	return it->second;
@@ -689,6 +691,8 @@ sta::ConstantPinIterator *YosysNetwork::constantPinIterator()
 {
 	sta::NetSet zero_nets(this);
 	sta::NetSet one_nets(this);
+	if (!linked())
+		return new sta::NetworkConstantPinIterator(this, zero_nets, one_nets);
 	for (YNet *net : view_->constNets(Netlist::Net::Const::Zero))
 		zero_nets.insert(handle(net));
 	for (YNet *net : view_->constNets(Netlist::Net::Const::One))

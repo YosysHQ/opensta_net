@@ -33,12 +33,12 @@ struct YosysStaReport : public sta::ReportTcl {
 
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
-	Yosys::NetView view;
 	// the constraints of the last epoch end
 	EpochConstraints constraints;
 	std::vector<ysta::Token> tokens;
 	Yosys::NetTracker tracker;
-	Yosys::TrackMode track_mode = Yosys::TrackMode::Barriers; // until -unprotect
+	// until -unprotect a $barrier keeps each ref through passes
+	bool track_barriers = true;
 	// sync
 	bool autosync = false;
 	bool running = false;
@@ -83,7 +83,7 @@ bool canBuild(Design *design);
 void syncView(Design *design);
 void rebuildAndReapply(Design *design);
 void warnDroppedParasitics();
-void warnSharedNames();
+void warnSharedNames(size_t shared);
 void undoHierPinDisables();
 void dropView();
 bool linkView(Design *design, std::string &error);

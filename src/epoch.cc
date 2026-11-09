@@ -59,7 +59,7 @@ bool captureEpochConstraints()
 	tclEval("::ysta::clear_journal");
 	parseCommands(modes);
 	orderOverrides(the_sta->constraints.commands);
-	the_sta->tracker.checkpoint(the_sta->view, the_sta->constraints.view_refs, the_sta->track_mode);
+	the_sta->tracker.checkpoint(staNetwork().view(), the_sta->constraints.view_refs, the_sta->track_barriers);
 	return journaled;
 }
 
@@ -68,7 +68,7 @@ void closeEpoch()
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	if (the_sta->running || !network->linked() || network->epoch_closed)
 		return;
-	if (!the_sta->view.upToDate())
+	if (!staNetwork().view().upToDate())
 		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
 	else if (!captureEpochConstraints())
 		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: they are lost.\n");
@@ -84,7 +84,7 @@ void openEpoch()
 
 bool needsSync()
 {
-	return the_sta->rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->view.upToDate());
+	return the_sta->rebuild_pending || (the_sta->yosys_network->linked() && !staNetwork().view().upToDate());
 }
 
 bool canBuild(Design *design)
@@ -164,12 +164,11 @@ void warnDroppedParasitics()
 	}
 }
 
-void warnSharedNames()
+void warnSharedNames(size_t shared)
 {
-	size_t shared = the_sta->yosys_network->takeSharedNames();
 	if (shared > 0)
-		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that name "
-		            "finds the other net.\n", shared);
+		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that "
+		            "name finds the other net.\n", shared);
 }
 
 // before the pins of this view go, in the mode of each disable
@@ -191,7 +190,6 @@ void dropView()
 		the_sta->networkChanged();
 		network->unlink();
 	}
-	the_sta->view.clear();
 }
 
 bool linkView(Design *design, std::string &error)
@@ -199,21 +197,19 @@ bool linkView(Design *design, std::string &error)
 	dropView();
 	auto t0 = std::chrono::steady_clock::now();
 	ysta::YosysNetwork *network = the_sta->yosys_network;
-	NetView *view = &the_sta->view;
-	network->attach(view);
+	size_t shared_names = 0;
 	try {
 		pool<const Cell *> barriers = the_sta->tracker.barrierInstances(design);
-		view->build(design, {network, &barriers});
-		network->link();
+		NetView::BuildOptions options = {network, &barriers};
+		shared_names = network->link(std::make_unique<NetView>(design, options));
 	} catch (const sta::Exception &exception) {
 		network->unlink();
-		view->clear();
 		error = exception.what();
 		return false;
 	}
-	warnSharedNames();
+	warnSharedNames(shared_names);
 	long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-	auto [insts, nets, pins] = view->counts();
+	auto [insts, nets, pins] = network->view().counts();
 	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
 	return true;
 }

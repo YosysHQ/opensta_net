@@ -269,10 +269,10 @@ void evalTcl(const std::string &cmd)
 void setProtection(Design *design, const PassOptions &opt)
 {
 	if (opt.protect)
-		the_sta->track_mode = TrackMode::Barriers;
+		the_sta->track_barriers = true;
 	if (!opt.unprotect)
 		return;
-	the_sta->track_mode = TrackMode::AnchorsOnly;
+	the_sta->track_barriers = false;
 	the_sta->yosys_network->epoch_closed = false;
 	the_sta->tracker.unprotect(design);
 	syncView(design);

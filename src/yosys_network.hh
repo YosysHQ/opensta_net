@@ -49,6 +49,8 @@ using ChildNames = std::map<std::string, Netlist::Instance *, std::less<>>;
 void claimName(RankedClaims &claims, const Netlist::NetName &name, Netlist::Net *net, bool canonical);
 size_t scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names);
 
+using ScopeCells = std::map<std::string, sta::ConcreteCell *, std::less<>>;
+
 // Map value, or an empty one
 template <typename Map, typename K> const typename Map::mapped_type &lookup(const Map &map, const K &key)
 {
@@ -132,11 +134,12 @@ public:
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
 
-	void attach(Yosys::NetView *view);
-	void link();
+	// needs unlinked, builds cells, ports, name tables and a new handle generation
+	// returns how many nets share a name, linkView warns
+	size_t link(std::unique_ptr<Yosys::NetView> view);
 	void unlink();
 	bool linked() const;
-	size_t takeSharedNames();
+	Yosys::NetView &view() const; // of the link
 
 	bool ports(const YInstance &inst, std::vector<Netlist::Port> &out) override;
 	bool isRegister(const YInstance &inst) override;
@@ -230,11 +233,11 @@ public:
 			return nullptr;
 		const Record *record;
 		if constexpr (std::is_same_v<Record, YInstance>)
-			record = view_->instanceById(handle.id());
+			record = view().instanceById(handle.id());
 		else if constexpr (std::is_same_v<Record, YPin>)
-			record = view_->pinById(handle.id());
+			record = view().pinById(handle.id());
 		else
-			record = view_->netById(handle.id());
+			record = view().netById(handle.id());
 		if (record == nullptr || handle.kind() != kind || handle.generation() != generation_)
 			refuseHandle();
 		return record;
@@ -246,17 +249,16 @@ private:
 	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::Port> &shapes);
 	void retireLibrary(sta::Library *library);
 	sta::ConcretePort *portOf(const YPin *pin) const;
-	void buildTables(YInstance *scope);
-	sta::ConcreteCell *scopeCell(const YInstance *scope);
+	size_t buildTables(YInstance *scope, detail::ScopeCells &scope_cells);
+	sta::ConcreteCell *scopeCell(const YInstance *scope, detail::ScopeCells &scope_cells);
 	std::string freeCellName(const YInstance *scope) const;
 	void indexPins(YInstance *inst);
 	void refuseHandle() const;
 private:
-	Yosys::NetView *view_ = nullptr;
+	std::unique_ptr<Yosys::NetView> view_;
 	uint32_t generation_ = 1;
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
-	size_t shared_name_count_ = 0; // nets with the canonical name of another net
 	std::vector<Token> *token_sink_ = nullptr; // token mode when set
 	mutable std::map<Token, size_t> token_index_;
 	bool stale_names_ = false;
@@ -273,9 +275,6 @@ private:
 	// Names, by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
 	Netlist::IdMap<detail::NetNames> net_names_;
-
-	// Link time: scope cells by master and body
-	std::map<std::string, sta::ConcreteCell *, std::less<>> scope_cells_;
 };
 
 } // namespace ysta

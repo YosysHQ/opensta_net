@@ -16,7 +16,7 @@ int resolveAndApply()
 		ref.use_objects.clear();
 		ref.inside_handled = false;
 	}
-	the_sta->tracker.resolve(the_sta->view, constraints.view_refs);
+	the_sta->tracker.resolve(staNetwork().view(), constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
 	std::string script = swapInfoScript("");

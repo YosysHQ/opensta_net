@@ -246,7 +246,8 @@ void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<
 	for (const Netlist::Pin *pin : pins) {
 		if (pin->inner == nullptr)
 			continue;
-		std::vector<Netlist::Pin *> leaves = the_sta->view.leafPins(pin->inner, Netlist::WalkTarget::Loads);
+		const NetView &view = staNetwork().view();
+		std::vector<Netlist::Pin *> leaves = view.leafPins(pin->inner, Netlist::WalkTarget::Loads);
 		std::vector<ysta::Handle> inner = handlesOf(leaves);
 		loads.insert(loads.end(), inner.begin(), inner.end());
 	}

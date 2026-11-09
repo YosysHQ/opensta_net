@@ -188,7 +188,7 @@ Yosys::NetView &YosysNetwork::view() const
 	return *view_;
 }
 
-void YosysNetwork::setOpenEpochHook(void (*hook)())
+void YosysNetwork::setOpenEpochHook(bool (*hook)())
 {
 	open_epoch_hook_ = hook;
 }
@@ -202,6 +202,16 @@ void YosysNetwork::setTokenSink(std::vector<Token> *sink)
 {
 	token_sink_ = sink;
 	token_index_.clear();
+}
+
+TokenScope::TokenScope(YosysNetwork &network, std::vector<Token> &tokens) : network(network)
+{
+	network.setTokenSink(&tokens);
+}
+
+TokenScope::~TokenScope()
+{
+	network.setTokenSink(nullptr);
 }
 
 void YosysNetwork::setStaleNames(bool on)
@@ -260,8 +270,7 @@ std::string YosysNetwork::pathName(const sta::Net *net) const
 
 bool YosysNetwork::isLinked() const
 {
-	open_epoch_hook_();
-	return linked() && !epoch_closed;
+	return open_epoch_hook_();
 }
 
 size_t YosysNetwork::link(std::unique_ptr<Yosys::NetView> view)

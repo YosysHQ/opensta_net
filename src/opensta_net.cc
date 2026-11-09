@@ -46,7 +46,7 @@ void YosysSta::makeReport()
 void YosysSta::makeNetwork()
 {
 	yosys_network = new ysta::YosysNetwork;
-	yosys_network->setOpenEpochHook(openEpoch);
+	yosys_network->setOpenEpochHook(queryHook);
 	network_ = yosys_network;
 }
 
@@ -102,22 +102,27 @@ bool tclEval(const std::string &script)
 	return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK;
 }
 
+bool queryHook()
+{
+	return the_sta->epochs.syncForQuery(yosys_get_design());
+}
+
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	closeEpoch();
+	the_sta->epochs.end();
 	return TCL_OK;
 }
 
 void beforePass(Pass *pass, Design *)
 {
 	if (pass->pass_name != "opensta_net")
-		closeEpoch();
+		the_sta->epochs.end();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
 	if (the_sta->autosync && yosys_get_design() != nullptr)
-		syncView(yosys_get_design());
+		the_sta->epochs.sync(yosys_get_design());
 	return TCL_OK;
 }
 
@@ -215,14 +220,14 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 void linkOrSync(Design *design, const PassOptions &opt)
 {
 	if (opt.link) {
-		linkDesign(design);
+		the_sta->epochs.link(design);
 		return;
 	}
 	// Passes may have run since the last call
-	if (!opt.sync && needsSync())
+	if (!opt.sync && the_sta->epochs.stale())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
-	syncView(design);
+	the_sta->epochs.sync(design);
 }
 
 void readLiberty(const std::string &file)
@@ -272,10 +277,7 @@ void setProtection(Design *design, const PassOptions &opt)
 		the_sta->track_barriers = true;
 	if (!opt.unprotect)
 		return;
-	the_sta->track_barriers = false;
-	the_sta->yosys_network->epoch_closed = false;
-	the_sta->tracker.unprotect(design);
-	syncView(design);
+	the_sta->epochs.unprotect(design);
 }
 
 OpenstaNetPass::OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}

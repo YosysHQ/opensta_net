@@ -128,8 +128,6 @@ template <typename T> sta::Iterator<T> *handleIterator(const std::vector<Handle>
 
 class YosysNetwork : public sta::ConcreteNetwork, public Netlist::CellLibrary {
 public:
-	bool epoch_closed = false; // queries wait for the sync
-
 	using sta::ConcreteNetwork::name;
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
@@ -148,7 +146,9 @@ public:
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
 	bool isLinked() const override;
-	void setOpenEpochHook(void (*hook)());
+	// required, set once after construction, isLinked returns its result
+	// queryHook -> Epochs::syncForQuery, relinks if the design changed
+	void setOpenEpochHook(bool (*hook)());
 
 	// Instance
 	sta::Instance *topInstance() const override;
@@ -262,7 +262,7 @@ private:
 	std::vector<Token> *token_sink_ = nullptr; // token mode when set
 	mutable std::map<Token, size_t> token_index_;
 	bool stale_names_ = false;
-	void (*open_epoch_hook_)() = nullptr;
+	bool (*open_epoch_hook_)() = nullptr;
 	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_;
 
 	// Cells and ports
@@ -275,6 +275,14 @@ private:
 	// Names, by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
 	Netlist::IdMap<detail::NetNames> net_names_;
+};
+
+// token mode while it lives, Epochs::capture makes one
+struct TokenScope {
+	TokenScope(YosysNetwork &network, std::vector<Token> &tokens);
+	~TokenScope();
+	TokenScope(const TokenScope &) = delete;
+	YosysNetwork &network;
 };
 
 } // namespace ysta

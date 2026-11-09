@@ -6,6 +6,8 @@
 
 #include <tcl.h>
 
+#include <optional>
+
 #include "yosys_network.hh"
 
 namespace opensta_net {
@@ -94,6 +96,17 @@ struct EpochConstraints {
 	std::vector<Yosys::TrackedRef *> view_refs; // refs as the kernel takes them
 };
 
+// one parse into constraints, a getter makes a ref per known token
+struct SdcReader {
+	const std::vector<ysta::Token> &tokens;
+	EpochConstraints &constraints;
+	bool parseWords(const std::string &script, std::vector<SdcWord> &words);
+	void parseSubstitution(const std::string &inner, SdcWord &word);
+	void addGetterRefs(const std::string &inner, SdcWord &word);
+	std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names = nullptr) const;
+	bool namesObject(const std::string &text) const;
+};
+
 // parse, tokens, render
 std::vector<std::string> sdcCommands(const std::string &text);
 std::string normalizeCommand(const std::string &cmd);
@@ -102,17 +115,13 @@ bool isClockCommand(const std::string &name);
 bool isThroughFlag(const std::string &word);
 bool isEdgePair(const std::vector<SdcWord> &words);
 bool isGetterList(const std::vector<SdcWord> &words);
-bool parseWords(const std::string &script, std::vector<SdcWord> &words);
-void parseSubstitution(const std::string &inner, SdcWord &word);
-void addGetterRefs(const std::string &inner, SdcWord &word);
-void parseCommands(const SdcTextByMode &modes);
+// SDC text by mode -> commands of words, getter tokens -> refs
+void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &tokens, EpochConstraints &into);
 int appendTraceTexts(SdcTextByMode &modes, const char *list);
 void joinName(std::vector<SdcWord> &words);
 void markRefs(const std::vector<SdcWord> &words, RefMark mark);
 bool tightness(const SdcCommand &command, double &tight);
 void orderOverrides(std::vector<SdcCommand> &commands);
-std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names = nullptr);
-bool namesObject(const std::string &text);
 std::string objectName(const sta::Network *network, ysta::Handle handle);
 std::vector<SdcObjectRef *> refsOf(const std::vector<SdcWord> &words);
 std::string tclQuoted(const std::string &text);

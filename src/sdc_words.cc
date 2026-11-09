@@ -118,7 +118,7 @@ bool isGetterList(const std::vector<SdcWord> &words)
 	return words.size() > 1 && words[0].text == "list";
 }
 
-bool parseWords(const std::string &script, std::vector<SdcWord> &words)
+bool SdcReader::parseWords(const std::string &script, std::vector<SdcWord> &words)
 {
 	Tcl_Parse parse;
 	if (Tcl_ParseCommand(nullptr, script.data(), script.size(), 0, &parse) != TCL_OK)
@@ -139,7 +139,7 @@ bool parseWords(const std::string &script, std::vector<SdcWord> &words)
 	return true;
 }
 
-void parseSubstitution(const std::string &inner, SdcWord &word)
+void SdcReader::parseSubstitution(const std::string &inner, SdcWord &word)
 {
 	std::string name = commandName(inner);
 	// splitnets -ports renames ports, so they are refs too
@@ -162,9 +162,8 @@ void parseSubstitution(const std::string &inner, SdcWord &word)
 	}
 }
 
-void addGetterRefs(const std::string &inner, SdcWord &word)
+void SdcReader::addGetterRefs(const std::string &inner, SdcWord &word)
 {
-	EpochConstraints &constraints = the_sta->constraints;
 	for (auto [kind, handle] : tokensIn(inner)) {
 		if (handle.bits == 0)
 			continue;
@@ -177,20 +176,21 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 		word.kind = WordKind::Getter;
 }
 
-void parseCommands(const SdcTextByMode &modes)
+void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &tokens, EpochConstraints &into)
 {
+	SdcReader reader{tokens, into};
 	for (const auto &[mode, sdc] : modes) {
 		for (const std::string &text : sdcCommands(sdc)) {
 			if (commandName(text) == "current_design")
 				continue;
-			SdcCommand &command = the_sta->constraints.commands.emplace_back();
+			SdcCommand &command = into.commands.emplace_back();
 			command.mode = mode;
 			command.text = text;
-			parseWords(text, command.words);
+			reader.parseWords(text, command.words);
 			joinName(command.words);
 			if (isClockCommand(commandName(text)))
 				markRefs(command.words, RefMark::KeepAsInstance);
-			tokensIn(text, &command.log_text);
+			reader.tokensIn(text, &command.log_text);
 		}
 	}
 }
@@ -287,10 +287,9 @@ void orderOverrides(std::vector<SdcCommand> &commands)
 		commands[places[i]] = std::move(sorted[i]);
 }
 
-std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
+std::vector<ysta::Token> SdcReader::tokensIn(const std::string &text, std::string *names) const
 {
 	std::vector<ysta::Token> found;
-	const std::vector<ysta::Token> &tokens = the_sta->tokens;
 	size_t at = 0;
 	size_t next;
 	while ((next = text.find(ysta::detail::token_prefix, at)) != std::string::npos) {
@@ -315,7 +314,7 @@ std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
 	return found;
 }
 
-bool namesObject(const std::string &text)
+bool SdcReader::namesObject(const std::string &text) const
 {
 	for (const auto &[kind, handle] : tokensIn(text)) {
 		if (kind != SdcObjectRef::Kind::TopPort)

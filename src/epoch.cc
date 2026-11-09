@@ -32,11 +32,14 @@ bool writeModeSdc(const std::string &mode, std::string &text)
 	return ok;
 }
 
+// a failed write leaves no text of any mode
 bool writeAllModes(SdcTextByMode &result)
 {
 	for (const sta::Mode *mode : the_sta->modes()) {
-		if (!writeModeSdc(mode->name(), result[mode->name()]))
+		if (!writeModeSdc(mode->name(), result[mode->name()])) {
+			result.clear();
 			return false;
+		}
 	}
 	return true;
 }

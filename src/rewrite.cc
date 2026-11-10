@@ -201,17 +201,35 @@ void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<
 	}
 }
 
-// a get_clocks of a known clock by its exact name
+// found clocks of a get_clocks or a list of them
 // write_sdc writes a name raw in braces, {a b} for clock a b
 std::string clockGetter(const SdcWord &word, RenderState &render)
 {
-	if (word.nested_words.size() != 2 || word.nested_words[0].text != "get_clocks")
-		return "";
-	const std::string &text = word.nested_words[1].text;
-	std::string name = unwrapped(text, '{', '}');
-	if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) == nullptr)
-		return "[get_clocks " + text + "]";
-	return "[get_clocks " + tclQuoted(tclQuoted(name)) + "]";
+	bool list = word.nested_words.size() > 1 && word.nested_words[0].text == "list";
+	std::vector<const SdcWord *> getters;
+	if (list) {
+		for (size_t i = 1; i < word.nested_words.size(); i++)
+			getters.push_back(&word.nested_words[i]);
+	} else {
+		getters.push_back(&word);
+	}
+	for (const SdcWord *getter : getters) {
+		if (getter->nested_words.size() != 2 || getter->nested_words[0].text != "get_clocks")
+			return "";
+	}
+	std::string clocks;
+	for (const SdcWord *getter : getters) {
+		std::string name = unwrapped(getter->nested_words[1].text, '{', '}');
+		if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) == nullptr)
+			appendSpaced(render.result.missing, name);
+		else
+			appendSpaced(clocks, "[get_clocks " + tclQuoted(tclQuoted(name)) + "]");
+	}
+	// OpenSTA drops a missing clock, no clock left loses the command
+	render.result.empty_getter |= clocks.empty();
+	if (list || clocks.empty())
+		return "[list " + clocks + "]";
+	return clocks;
 }
 
 void appendSpaced(std::string &text, const std::string &word)

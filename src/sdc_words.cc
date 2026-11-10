@@ -433,7 +433,7 @@ std::string refHandles(const SdcObjectRef &ref, const std::vector<ysta::Handle> 
 	std::string handles;
 	for (ysta::Handle handle : objects) {
 		if (ref.kind == SdcObjectRef::Kind::TopPort)
-			handles += " [get_ports " + tclQuoted(objectName(&staNetwork(), handle)) + "]";
+			handles += " " + portByName(objectName(&staNetwork(), handle));
 		else
 			handles += " " + swigHandle(handle);
 	}

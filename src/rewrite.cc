@@ -223,13 +223,30 @@ std::string clockGetter(const SdcWord &word, RenderState &render)
 		if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) == nullptr)
 			appendSpaced(render.result.missing, name);
 		else
-			appendSpaced(clocks, "[get_clocks " + tclQuoted(tclQuoted(name)) + "]");
+			appendSpaced(clocks, clockByName(name));
 	}
 	// OpenSTA drops a missing clock, no clock left loses the command
 	render.result.empty_getter |= clocks.empty();
 	if (list || clocks.empty())
 		return "[list " + clocks + "]";
 	return clocks;
+}
+
+// get_clocks reads * ? and backslash as pattern chars
+// find_clock takes the exact name
+std::string clockByName(const std::string &name)
+{
+	if (name.find_first_of("*?\\") != std::string::npos)
+		return "[::sta::find_clock " + tclQuoted(name) + "]";
+	return "[get_clocks " + tclQuoted(tclQuoted(name)) + "]";
+}
+
+// get_ports takes * and ? as wildcards, find_port the exact name
+std::string portByName(const std::string &name)
+{
+	if (name.find_first_of("*?") != std::string::npos)
+		return "[[[::sta::top_instance] cell] find_port " + tclQuoted(name) + "]";
+	return "[get_ports " + tclQuoted(name) + "]";
 }
 
 void appendSpaced(std::string &text, const std::string &word)

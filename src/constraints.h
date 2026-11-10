@@ -163,6 +163,8 @@ Handles standIns(const SdcObjectRef &ref, Use use, const Handles &found);
 Handles loadsInside(const SdcObjectRef &ref);
 void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, Handles &loads);
 std::string clockGetter(const SdcWord &word, RenderState &render); // "" when not a get_clocks word
+std::string clockByName(const std::string &name);
+std::string portByName(const std::string &name);
 void appendSpaced(std::string &text, const std::string &word);
 
 // apply

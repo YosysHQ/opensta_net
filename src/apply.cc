@@ -11,11 +11,6 @@ namespace opensta_net {
 int resolveAndApply()
 {
 	EpochConstraints &constraints = the_sta->constraints;
-	for (SdcObjectRef &ref : constraints.refs) {
-		ref.used_outside_through = false;
-		ref.use_objects.clear();
-		ref.inside_handled = false;
-	}
 	the_sta->tracker.resolve(staNetwork().view(), constraints.view_refs);
 	std::string cmd_mode = the_sta->cmdMode()->name();
 	sta::Scene *cmd_scene = the_sta->cmdScene();
@@ -41,24 +36,17 @@ int resolveAndApply()
 bool applyCommand(const SdcCommand &command, std::string &reason)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
-	int empty_getters = 0;
-	std::vector<SdcWord> words = command.words;
-	rewriteWords(words);
-	std::string script = command.text;
-	if (!words.empty())
-		script = renderWords(words, empty_getters, ThroughContext::OutsideThrough);
-	RefLosses rendered = refLosses(words);
-	RefLosses original = refLosses(command.words);
+	RenderedCommand rendered = renderCommand(command);
 	// OpenSTA drops, narrows or changes a command with an empty getter
-	if (empty_getters > 0) {
+	if (rendered.empty_getter) {
 		reason = "no object found for " + rendered.missing;
 		return false;
 	}
-	if (!refsOf(words).empty() && !rendered.found) {
+	if (rendered.refs_rendered && !rendered.found) {
 		reason = "-unprotect removed the barrier that kept its hierarchical pin";
 		return false;
 	}
-	if (Tcl_EvalEx(interp, script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
+	if (Tcl_EvalEx(interp, rendered.script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
 		reason = std::string("failed: ") + Tcl_GetStringResult(interp);
 		return false;
 	}
@@ -66,33 +54,15 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		reason = "applied without " + rendered.missing;
 		return false;
 	}
-	if (original.to_drivers) {
+	if (rendered.to_drivers) {
 		reason = "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
 		return false;
 	}
-	if (!original.moved.empty()) {
-		reason = "applied, flatten moved it to the leaf pins inside: " + original.moved;
+	if (!rendered.moved.empty()) {
+		reason = "applied, flatten moved it to the leaf pins inside: " + rendered.moved;
 		return false;
 	}
 	return true;
-}
-
-// a -through or a clock on an input pin that flatten moved inside keeps its meaning
-RefLosses refLosses(const std::vector<SdcWord> &words)
-{
-	bool clock = !words.empty() && isClockCommand(words[0].text);
-	RefLosses losses;
-	for (SdcObjectRef *ref : refsOf(words)) {
-		bool none = ref->objects().empty();
-		bool clock_input = clock && ref->origin.hier_pin_dir == Netlist::PortDir::Input;
-		losses.found |= !none;
-		losses.to_drivers |= ref->origin.anchored_on_drivers;
-		if (none && !ref->origin.on_barrier_instance)
-			losses.missing += (losses.missing.empty() ? "" : " ") + ref->name;
-		if (ref->stillAsLeafPins() && ref->used_outside_through && !clock_input)
-			losses.moved += (losses.moved.empty() ? "" : " ") + ref->name;
-	}
-	return losses;
 }
 
 // a getter of barrier instance pins only, opensta ignores their clock attributes

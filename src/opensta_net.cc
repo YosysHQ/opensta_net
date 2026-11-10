@@ -30,8 +30,6 @@ void NonConsoleTee::operator()(LogSink &sink) const
 size_t YosysStaReport::printString(const char *buffer, size_t length)
 {
 	std::string_view text(buffer, length);
-	if (text.starts_with("Warning"))
-		warnings++;
 	LogMessage msg(LogSeverity::Info, {}, "", "%s", text);
 	msg.cached_msg = std::string(text);
 	logger().for_each_sink(NonConsoleTee{msg});

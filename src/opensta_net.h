@@ -27,7 +27,6 @@ struct NonConsoleTee {
 };
 
 struct YosysStaReport : public sta::ReportTcl {
-	int warnings = 0;
 	size_t printString(const char *buffer, size_t length) override;
 };
 

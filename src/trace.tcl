@@ -154,7 +154,6 @@ proc ::ysta::undo_hier_disables {} {
 	}
 	return $changed
 }
-proc ::ysta::kept_count {} { return [llength $::ysta::kept] }
 # {texts untexted} of kept or journal
 proc ::ysta::texts {which} {
 	set texts [dict create]

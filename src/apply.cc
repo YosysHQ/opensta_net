@@ -41,7 +41,6 @@ int resolveAndApply()
 bool applyCommand(const SdcCommand &command, std::string &reason)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
-	YosysStaReport *report = static_cast<YosysStaReport *>(the_sta->report());
 	int empty_getters = 0;
 	std::vector<SdcWord> words = command.words;
 	rewriteWords(words);
@@ -59,15 +58,8 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 		reason = "-unprotect removed the barrier that kept its hierarchical pin";
 		return false;
 	}
-	int warnings = report->warnings;
-	int kept = tclInt("::ysta::kept_count");
 	if (Tcl_EvalEx(interp, script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
 		reason = std::string("failed: ") + Tcl_GetStringResult(interp);
-		return false;
-	}
-	// a warning of a command that the trace keeps again loses nothing
-	if (report->warnings != warnings && tclInt("::ysta::kept_count") == kept) {
-		reason = "applied with a warning";
 		return false;
 	}
 	if (!rendered.missing.empty()) {

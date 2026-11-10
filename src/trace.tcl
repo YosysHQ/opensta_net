@@ -281,17 +281,3 @@ proc ::ysta::wire_edges {pins} {
 	if {$edges eq {}} { error "no wire edge into the pins" }
 	return $edges
 }
-# 1 if each edge into founds inverts and comes from an exact pin
-proc ::ysta::behind_inverter {founds exacts} {
-	set nets {}
-	foreach exact $exacts { lappend nets [get_full_name [get_nets -of_objects $exact]] }
-	foreach found $founds {
-		set edges [get_timing_edges -to $found]
-		if {$edges eq {}} { return 0 }
-		foreach edge $edges {
-			set net [get_full_name [get_nets -of_objects [$edge from_pin]]]
-			if {![::ysta::inverts $edge] || $net ni $nets} { return 0 }
-		}
-	}
-	return 1
-}

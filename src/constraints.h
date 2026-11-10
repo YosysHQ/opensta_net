@@ -140,8 +140,6 @@ void splitEndpoints(std::vector<SdcWord> &words);
 void exactStartPins(std::vector<SdcWord> &words, size_t at);
 void disableWireEdges(std::vector<SdcWord> &words);
 void hierPinLoads(std::vector<SdcWord> &words);
-void invertClock(std::vector<SdcWord> &words);
-std::string rotateEdges(const std::string &text);
 bool anyBehindNewLogic(const SdcWord &word);
 bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag);
 void applyClockPins(const std::vector<SdcWord> &words);

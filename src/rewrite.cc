@@ -17,7 +17,6 @@ void rewriteWords(std::vector<SdcWord> &words)
 	splitEndpoints(words);
 	disableWireEdges(words);
 	hierPinLoads(words);
-	invertClock(words);
 	applyClockPins(words);
 	singleReferencePin(words);
 	quoteClocks(words);
@@ -124,45 +123,6 @@ void hierPinLoads(std::vector<SdcWord> &words)
 			ref->inside_handled = true;
 		}
 	}
-}
-
-// a generated clock behind a new inverter after Q goes on Q inverted, opensta shifts an -edge_shift inverse by a period
-void invertClock(std::vector<SdcWord> &words)
-{
-	if (words[0].text != "create_generated_clock" || !anyBehindNewLogic(words.back()) || hasFlag(words, "-edge_shift"))
-		return;
-	std::string found, exact;
-	for (SdcObjectRef *ref : words.back().refs) {
-		found += refHandles(*ref, ThroughContext::OutsideThrough, PinChoice::FoundPins);
-		exact += refHandles(*ref, ThroughContext::OutsideThrough, PinChoice::ExactPins);
-	}
-	if (tclInt("::ysta::behind_inverter [list" + found + "] [list" + exact + "]") != 1)
-		return;
-	words.back().pin_choice = PinChoice::ExactPins;
-	bool edges = false;
-	size_t invert = 0;
-	for (size_t i = 1; i + 1 < words.size(); i++) {
-		if (words[i].text == "-invert")
-			invert = i;
-		if (words[i].text == "-edges") {
-			words[i + 1].text = rotateEdges(words[i + 1].text);
-			edges = true;
-		}
-	}
-	if (invert != 0)
-		words.erase(words.begin() + invert);
-	else if (!edges)
-		words.insert(words.end() - 1, SdcWord{"-invert"});
-}
-
-// the edges of the inverse clock, {a b c} as {b c c+b-a}
-std::string rotateEdges(const std::string &text)
-{
-	std::vector<std::string> parts = split_tokens(text.substr(1, text.size() - 2), " ");
-	if (parts.size() != 3)
-		return text;
-	int next = atoi(parts[2].c_str()) + atoi(parts[1].c_str()) - atoi(parts[0].c_str());
-	return "{" + parts[1] + " " + parts[2] + " " + std::to_string(next) + "}";
 }
 
 bool anyBehindNewLogic(const SdcWord &word)

@@ -155,7 +155,6 @@ int resolveAndApply();
 bool applyCommand(const SdcCommand &command, std::string &reason);
 RefLosses refLosses(const std::vector<SdcWord> &words);
 bool onlyBarrierInstancePins(const SdcWord &word);
-int tclInt(const std::string &script);
 std::string swapInfoScript(const std::string &script);
 
 } // namespace opensta_net

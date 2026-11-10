@@ -183,22 +183,12 @@ void warnSharedNames(size_t shared)
 		            "name finds the other net.\n", shared);
 }
 
-// before the pins of this view go, in the mode of each disable
-void undoHierPinDisables()
-{
-	sta::Scene *cmd_scene = the_sta->cmdScene();
-	std::string cmd_mode = the_sta->cmdMode()->name();
-	if (tclInt("::ysta::undo_hier_disables") != 1)
-		return;
-	the_sta->setCmdScene(cmd_scene);
-	the_sta->setCmdMode(cmd_mode);
-}
-
 void dropView()
 {
 	ysta::YosysNetwork *network = the_sta->yosys_network;
 	if (network->linked()) {
-		undoHierPinDisables();
+		// before the pins of this view go, in the mode of each disable
+		tclEval("::ysta::undo_hier_disables");
 		the_sta->networkChanged();
 		network->unlink();
 	}

@@ -137,8 +137,10 @@ proc ::ysta::record_hier_disable {cmd code result op} {
 	if {$code == 0} { lappend ::ysta::hier_disables [list [::sta::cmd_mode_name] [lindex $cmd 1]] }
 }
 trace add execution ::sta::disable_pin leave ::ysta::record_hier_disable
-# 1 if it changed the cmd mode
+# we restore the cmd scene and mode if we changed the mode
 proc ::ysta::undo_hier_disables {} {
+	set scene [::sta::cmd_scene]
+	set cmd_mode [::sta::cmd_mode_name]
 	set disables $::ysta::hier_disables
 	set ::ysta::hier_disables {}
 	set changed 0
@@ -152,7 +154,10 @@ proc ::ysta::undo_hier_disables {} {
 		}
 		catch {::sta::unset_disable_pin $pin}
 	}
-	return $changed
+	if {$changed} {
+		::sta::set_cmd_scene $scene
+		::sta::set_cmd_mode $cmd_mode
+	}
 }
 # {texts untexted} of kept or journal
 proc ::ysta::texts {which} {

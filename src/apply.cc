@@ -105,12 +105,6 @@ bool onlyBarrierInstancePins(const SdcWord &word)
 	return true;
 }
 
-int tclInt(const std::string &script)
-{
-	tclEval(script);
-	return atoi(Tcl_GetStringResult(yosys_get_tcl_interp()));
-}
-
 // sets [info script] and returns the last one, sta_warn and sta_error add its file and line to a message
 std::string swapInfoScript(const std::string &script)
 {

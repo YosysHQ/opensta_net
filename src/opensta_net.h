@@ -100,7 +100,6 @@ bool writeAllModes(SdcTextByMode &result);
 bool canBuild(Design *design);
 void warnDroppedParasitics();
 void warnSharedNames(size_t shared);
-void undoHierPinDisables();
 void dropView();
 bool linkView(Design *design, std::string &error);
 

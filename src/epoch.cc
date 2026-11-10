@@ -192,6 +192,7 @@ void dropView()
 		the_sta->networkChanged();
 		network->unlink();
 	}
+	the_sta->user_names.clear();
 }
 
 bool linkView(Design *design, std::string &error)

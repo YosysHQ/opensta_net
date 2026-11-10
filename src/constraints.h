@@ -17,7 +17,7 @@ using Handles = std::vector<ysta::Handle>;
 
 // one per getter word object, see apply.cc
 struct SdcObjectRef : Yosys::TrackedRef {
-	std::string name;
+	std::string name; // user name, see userName
 	Handles objects() const; // the found objects of its kind
 	void addObject(ysta::Handle handle);
 };
@@ -88,12 +88,15 @@ struct RenderedCommand {
 	std::string moved;          // refs on a hierarchical pin flatten removed
 	bool found = false;
 	bool to_drivers = false;    // -unprotect moved refs to the drivers
+	// Barrier instance pins it took, with their ref names
+	std::vector<std::pair<ysta::Handle, std::string>> barrier_pin_names = {};
 };
 
 // one per renderCommand
 struct RenderState {
 	RenderedCommand result = {};
 	Yosys::pool<const SdcObjectRef *> on_stand_ins = {}; // refs with stand-ins, noteMovedRefs skips them
+	Yosys::pool<const SdcObjectRef *> missing_refs = {}; // refs in result.missing, a getter can render twice
 	std::vector<std::string> words_after_from = {};      // unbraced word after each -from, see renamedCells
 };
 
@@ -134,6 +137,7 @@ Use useOf(const std::string &command, const std::string &flag, bool latency_sour
 bool tightness(const SdcCommand &command, double &tight);
 void orderOverrides(std::vector<SdcCommand> &commands);
 std::string objectName(const sta::Network *network, ysta::Handle handle);
+std::string userName(ysta::Handle handle);
 std::vector<SdcObjectRef *> refsOf(const SdcWords &words);
 std::string tclQuoted(const std::string &text);
 std::string swigHandle(ysta::Handle handle);
@@ -165,6 +169,7 @@ void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, Handl
 std::string clockGetter(const SdcWord &word, RenderState &render); // "" when not a get_clocks word
 std::string clockByName(const std::string &name);
 std::string portByName(const std::string &name);
+void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects, RenderedCommand &rendered);
 void appendSpaced(std::string &text, const std::string &word);
 
 // apply

@@ -65,6 +65,8 @@ struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
 	// the constraints of the last epoch end
 	EpochConstraints constraints;
+	// ref name per Barrier instance pin, set by sync, read by userName
+	std::map<ysta::Handle, std::string> user_names;
 	Yosys::NetTracker tracker;
 	// until -unprotect a $barrier keeps each ref through passes
 	bool track_barriers = true;

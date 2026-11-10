@@ -37,6 +37,8 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	RenderedCommand rendered = renderCommand(command);
+	for (const auto &[handle, name] : rendered.barrier_pin_names)
+		the_sta->user_names[handle] = name;
 	// OpenSTA drops, narrows or changes a command with an empty getter
 	if (rendered.empty_getter) {
 		reason = "no object found for " + rendered.missing;

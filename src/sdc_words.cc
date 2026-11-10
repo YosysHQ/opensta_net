@@ -162,7 +162,7 @@ void SdcReader::addGetterRefs(const std::string &inner, SdcWord &word)
 	for (auto [kind, handle] : tokensIn(inner)) {
 		if (handle.bits == 0)
 			continue;
-		SdcObjectRef &ref = constraints.refs.emplace_back(SdcObjectRef{{kind}, objectName(&staNetwork(), handle)});
+		SdcObjectRef &ref = constraints.refs.emplace_back(SdcObjectRef{{kind}, userName(handle)});
 		ref.addObject(handle);
 		word.refs.push_back(&ref);
 		constraints.view_refs.push_back(&ref);
@@ -352,7 +352,7 @@ std::vector<ysta::Token> SdcReader::tokensIn(const std::string &text, std::strin
 			continue;
 		*names += text.substr(from, next - from);
 		if (known)
-			*names += objectName(&staNetwork(), tokens[index].handle);
+			*names += userName(tokens[index].handle);
 		else
 			*names += text.substr(next, at - next);
 	}
@@ -377,6 +377,16 @@ std::string objectName(const sta::Network *network, ysta::Handle handle)
 	case ysta::Handle::Kind::Net: return network->pathName(static_cast<const sta::Net *>(handle));
 	default: return network->pathName(static_cast<const sta::Pin *>(handle));
 	}
+}
+
+// a Barrier instance pin gets the name of its sync ref
+// a loss then names the user's object
+std::string userName(ysta::Handle handle)
+{
+	auto found = the_sta->user_names.find(handle);
+	if (found != the_sta->user_names.end())
+		return found->second;
+	return objectName(&staNetwork(), handle);
 }
 
 std::vector<SdcObjectRef *> refsOf(const std::vector<SdcWord> &words)
@@ -479,9 +489,10 @@ std::string renderGetter(const SdcWord &word, Use use, Pins pins, RenderState &r
 			render.on_stand_ins.insert(ref);
 		render.result.refs_rendered = true;
 		render.result.found |= !found.empty();
-		if (found.empty() && !ref->origin.on_barrier_instance)
+		if (found.empty() && !ref->origin.on_barrier_instance && render.missing_refs.insert(ref).second)
 			appendSpaced(render.result.missing, ref->name);
 		std::vector<ysta::Handle> objects = objectsFor(*ref, use, pins, stand_ins, found);
+		noteBarrierPinNames(*ref, objects, render.result);
 		handles += refHandles(*ref, objects);
 	}
 	render.result.empty_getter |= handles.empty() && !onlyBarrierInstancePins(word);

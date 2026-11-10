@@ -249,6 +249,16 @@ std::string portByName(const std::string &name)
 	return "[get_ports " + tclQuoted(name) + "]";
 }
 
+void noteBarrierPinNames(const SdcObjectRef &ref, const std::vector<ysta::Handle> &objects, RenderedCommand &rendered)
+{
+	for (ysta::Handle handle : objects) {
+		if (handle.kind() != ysta::Handle::Kind::Pin)
+			continue;
+		if (staNetwork().recordOf<Netlist::Pin>(handle)->inst->kind == Netlist::Instance::Kind::Barrier)
+			rendered.barrier_pin_names.emplace_back(handle, ref.name);
+	}
+}
+
 void appendSpaced(std::string &text, const std::string &word)
 {
 	if (!text.empty())

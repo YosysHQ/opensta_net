@@ -1,4 +1,4 @@
-# a -reference_pin that a pass turns into several pins of one clock keeps one of them
+# a -reference_pin that becomes several pins of one clock keeps one
 source test/lib/check.tcl
 yosys read_verilog test/data/track.v
 yosys hierarchy -top top

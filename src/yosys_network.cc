@@ -35,7 +35,7 @@ uint32_t Handle::id() const
 	return uint32_t(bits);
 }
 
-// little-endian hex, then the type: _40a3..._p_Pin
+// little-endian hex then the type, like _40a3..._p_Pin
 std::string Handle::swigName() const
 {
 	static const char *types[] = {"Instance", "Pin", "Net", "Term"};
@@ -45,8 +45,8 @@ std::string Handle::swigName() const
 	return name + "_p_" + types[int(kind())];
 }
 
-// '/', '[', ']' and '\' escaped, as OpenSTA's readers store names: SdcNetwork
-// depends on it to resolve esc/inst or a[3]
+// escapes '/', '[', ']' and '\' as OpenSTA's readers store names
+// SdcNetwork needs it to resolve esc/inst or a[3]
 std::string detail::staName(std::string_view raw)
 {
 	std::string result;
@@ -116,7 +116,8 @@ void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
 	}
 }
 
-// The first claim of a name owns it until a claim beats it (a net name beats an alias, then the smaller wire bit wins)
+// the first claim of a name owns it until a claim beats it
+// a net name beats an alias, then the smaller wire bit wins
 void detail::claimName(RankedClaims &claims, const Netlist::NetName &name, Netlist::Net *net, bool canonical)
 {
 	RankedClaim ranked = {{net, canonical}, name.wire, name.index};
@@ -133,10 +134,14 @@ void detail::claimName(RankedClaims &claims, const Netlist::NetName &name, Netli
 		owner = ranked;
 }
 
+// names the nets of one scope
+// returns how many nets have a canonical name another scope net has
 size_t detail::scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *scope, NetNames &names)
 {
 	RankedClaims claims;
 	size_t shared = 0;
+	// canonical names -> aliases -> constants
+	// the constants take one_ and zero_ over any claim
 	for (Netlist::Net *net : netlist.nets(scope)) {
 		if (net->constant != Netlist::Net::Const::None)
 			continue;
@@ -412,7 +417,7 @@ sta::ConcretePort *YosysNetwork::portOf(const YPin *pin) const
 	return reinterpret_cast<sta::ConcretePort *>(bit);
 }
 
-// The cell and the pin ports of an instance
+// the cell and the pin ports of an instance
 void YosysNetwork::indexPins(YInstance *inst)
 {
 	if (inst->isLeaf())
@@ -512,7 +517,7 @@ sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_
 	return handle(detail::lookup(child_names_.get(recordOf<YInstance>(parent)->id), name));
 }
 
-// A pattern also matches the cell name of a flattened child, u.i0 for u\/i0
+// a pattern also matches a flattened child's cell name, u.i0 for u\/i0
 void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern, sta::InstanceSeq &matches) const
 {
 	if (!pattern->hasWildcards()) {
@@ -544,7 +549,7 @@ sta::Pin *YosysNetwork::findPin(const sta::Instance *instance, const sta::Port *
 	return findPin(instance, name(port));
 }
 
-// Name order, host-name aliases skipped
+// name order, host-name aliases skipped
 sta::InstanceChildIterator *YosysNetwork::childIterator(const sta::Instance *instance) const
 {
 	std::vector<YInstance *> children;
@@ -562,7 +567,7 @@ sta::InstancePinIterator *YosysNetwork::pinIterator(const sta::Instance *instanc
 	return detail::handleIterator<sta::Pin *>(handles(pins));
 }
 
-// Name order, aliases skipped
+// name order, aliases skipped
 sta::InstanceNetIterator *YosysNetwork::netIterator(const sta::Instance *instance) const
 {
 	std::vector<YNet *> nets;

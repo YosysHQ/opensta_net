@@ -1,4 +1,4 @@
-# barriers do not block rename -wire, and -unprotect leaves no cut wire that autoname named
+# barriers do not block rename -wire
 source test/lib/check.tcl
 yosys read_verilog test/data/moved_pins.v
 yosys hierarchy -top top
@@ -13,6 +13,7 @@ yosys opt_clean
 yosys select -assert-min 1 t:\$barrier
 yosys rename -wire -suffix _reg {t:$_DFF*}
 yosys select -assert-count 3 {t:$_DFF*} n:*_reg %i
+# -unprotect leaves no cut wire that autoname named
 yosys autoname
 yosys opensta_net -unprotect
 yosys opt_clean -purge

@@ -1,5 +1,4 @@
-# passes move pins behind new logic: the sync keeps the edge of a -from, the
-# -to endpoints, arc ports and a timing edge
+# passes move pins behind new logic
 source test/lib/check.tcl
 yosys read_verilog test/data/moved_pins.v
 yosys hierarchy -top top
@@ -16,10 +15,12 @@ set_max_delay 9 -from [get_pins rn_reg/C]
 set_disable_timing -from C -to Q [get_cells s_reg]
 set_disable_timing [get_timing_edges -from [get_pins rn_reg/C] -to [get_pins rn_reg/Q]]
 group_path -name g -to [get_pins re_reg/D]
-# dfflibmap puts an inverter before the clock of rn and a mux before D of re
+# dfflibmap puts an inverter before the rn clock
+# it puts a mux before D of re
 yosys dfflibmap -liberty $nangate
 yosys abc -liberty $nangate
 yosys insbuf -buf BUF_X1 A Z
+# the sync keeps the -from edge, -to endpoints, arc ports, timing edge
 check_eq [sync_losses [log_of opensta_net -sync]] 0
 set sdc [written_sdc]
 check_eq [count_lines $sdc {set_false_path -fall_from [get_pins {rn_reg/CK}]}] 1

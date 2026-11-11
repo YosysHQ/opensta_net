@@ -1,7 +1,7 @@
-# a rebuild that ends in a command error (a connected cell of a type that no
-# library knows) does not stop the syncs after the next -link
+# a failed rebuild does not stop the syncs after the next -link
 source test/lib/check.tcl
 link_top test/data/simple.v
+# a connected cell of a type no library knows
 yosys chtype -set FOO top/u_inv1
 set log [error_of {log_of opensta_net -sync}]
 check_eq [count_lines $log {ERROR: NetView: no port model for cell type FOO (cell u_inv1).}] 1

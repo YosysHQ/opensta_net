@@ -1,5 +1,4 @@
-# the constraints of track.sdc on a mapped design survive autoname, flatten
-# and -unprotect: each sync loses none and reports none changed
+# track.sdc on a mapped design survives autoname, flatten and -unprotect
 source test/lib/check.tcl
 proc track {passes} {
 	yosys design -reset

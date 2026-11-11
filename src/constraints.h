@@ -22,7 +22,7 @@ struct SdcObjectRef : Yosys::TrackedRef {
 	void addObject(ysta::Handle handle);
 };
 
-ysta::YosysNetwork &staNetwork();
+ysta::YosysNetwork &staNetwork(); // of the_sta
 
 template <typename T> std::vector<ysta::Handle> handlesOf(const std::vector<T *> &records)
 {
@@ -56,12 +56,13 @@ enum class Pins : uint8_t {
 	Exact  // own_pins
 };
 
+// the hint markRefs sets
 enum class RefMark : uint8_t {
-	IsolateCell,
-	KeepAsInstance
+	IsolateCell,   // hints.keep_cell on the arc ends of get_timing_edges
+	KeepAsInstance // hints.keep_as_instance on the pins of a clock command
 };
 
-// one tcl word of a command
+// one Tcl word of a command
 struct SdcWord {
 	std::string text;
 	WordKind kind = WordKind::Plain;
@@ -100,11 +101,11 @@ struct RenderState {
 	std::vector<std::string> words_after_from = {};      // unbraced word after each -from, see renamedCells
 };
 
-// the constraints of the last epoch end
+// from the last epoch end
 struct EpochConstraints {
 	std::vector<SdcCommand> commands;
-	std::deque<SdcObjectRef> refs;
-	std::vector<Yosys::TrackedRef *> view_refs; // refs as the kernel takes them
+	std::deque<SdcObjectRef> refs;              // pointers stay valid over several parses
+	std::vector<Yosys::TrackedRef *> view_refs; // refs as NetTracker takes them
 };
 
 // one parse into constraints, a getter makes a ref per known token
@@ -128,6 +129,7 @@ bool isEdgePair(const SdcWords &words);
 bool isGetterList(const SdcWords &words);
 // SDC text by mode -> commands of words, getter tokens -> refs
 void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &tokens, EpochConstraints &into);
+// list is "journal" or "kept", see trace.tcl
 int appendTraceTexts(SdcTextByMode &modes, const char *list);
 void joinName(SdcWords &words);
 void markRefs(const SdcWords &words, RefMark mark);
@@ -135,6 +137,7 @@ void assignUses(SdcWords &words, const std::string &command, bool latency_source
 void assignUse(SdcWords &words, Use use);
 Use useOf(const std::string &command, const std::string &flag, bool latency_source);
 bool tightness(const SdcCommand &command, double &tight);
+// after parseCommands, before tracker.checkpoint
 void orderOverrides(std::vector<SdcCommand> &commands);
 std::string objectName(const sta::Network *network, ysta::Handle handle);
 std::string userName(ysta::Handle handle);
@@ -159,6 +162,7 @@ std::optional<std::string> renderFlagAndGetterBehindNewLogic(const SdcWords &wor
 std::string renderTopWord(const SdcWords &words, size_t at, RenderState &render);
 // set_disable_timing on a moved pin or removed cell as wire edges, else ""
 std::string disabledEdges(const SdcWord &word, RenderState &render);
+// see TrackedRef::isBehindNewLogic
 bool anyBehindNewLogic(const SdcWord &word);
 bool hasFlag(const SdcWords &words, const std::string &flag);
 // objects that take a ref's use in place of its found objects
@@ -173,8 +177,9 @@ void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects, Render
 void appendSpaced(std::string &text, const std::string &word);
 
 // apply
-int resolveAndApply();
-bool applyCommand(const SdcCommand &command, std::string &reason);
+// clocks and library objects apply by name
+int resolveAndApply(); // logs each lost or changed command, returns how many
+bool applyCommand(const SdcCommand &command, std::string &reason); // false when lost or changed
 bool onlyBarrierInstancePins(const SdcWord &word);
 std::string swapInfoScript(const std::string &script);
 

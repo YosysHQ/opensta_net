@@ -1,4 +1,4 @@
-# after flatten a pattern also matches the cell name of a flat cell, u1.r for u1/r, and the matches keep the order of the cell names
+# after flatten a pattern matches flat cell names, u1.r for u1/r
 source test/lib/check.tcl
 link_top test/data/flat.v
 yosys flatten
@@ -9,4 +9,5 @@ yosys design -reset
 link_top [temp_file {module sub(input a, output y); INV r(.A(a), .Y(y)); endmodule
 module top(input a, output y, z, w); sub u1(.a(a), .y(y)); sub u10(.a(a), .y(z)); INV u1A(.A(a), .Y(w)); endmodule}]
 yosys flatten
+# the matches keep the order of the cell names
 check_eq [lmap c [get_cells *] {get_full_name $c}] {u10/r u1A u1/r}

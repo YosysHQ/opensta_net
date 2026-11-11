@@ -1,6 +1,4 @@
-// sdc text to commands of words and back:
-// - parse   write_sdc writes objects as tokens, each token of a getter becomes a ref
-// - render  the words as a script on the objects that resolve found
+// SDC text to commands of words and back
 #include "opensta_net.h"
 
 #include <charconv>
@@ -49,7 +47,7 @@ std::vector<std::string> sdcCommands(const std::string &text)
 			commands.push_back(cmd);
 		cmd.clear();
 	}
-	// incomplete: its evaluation reports the error
+	// an incomplete command stays, its evaluation reports the error
 	if (!normalizeCommand(cmd).empty())
 		commands.push_back(cmd);
 	return commands;
@@ -152,7 +150,7 @@ void SdcReader::parseSubstitution(const std::string &inner, SdcWord &word)
 		word.kind = WordKind::Substitution;
 	if (isEdgePair(word.nested_words))
 		markRefs(word.nested_words, RefMark::IsolateCell);
-	// R4: a list of getters is one getter, so the rewrites see its refs
+	// a list of getters is one getter, so the rewrites see its refs
 	if (isGetterList(word.nested_words)) {
 		word.refs = refsOf(word.nested_words);
 		word.nested_words.clear();
@@ -160,6 +158,8 @@ void SdcReader::parseSubstitution(const std::string &inner, SdcWord &word)
 	}
 }
 
+// a new ref has one object
+// markRefs sets its hints later, the kernel resolve sets its result
 void SdcReader::addGetterRefs(const std::string &inner, SdcWord &word)
 {
 	for (auto [kind, handle] : tokensIn(inner)) {
@@ -194,7 +194,8 @@ void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &t
 	}
 }
 
-// adds the texts of the kept list or the journal (::ysta::texts), returns the count of commands with no text
+// adds the texts of the kept list or the journal, see ::ysta::texts
+// returns the count of commands with no text
 int appendTraceTexts(SdcTextByMode &modes, const char *list)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
@@ -215,7 +216,8 @@ int appendTraceTexts(SdcTextByMode &modes, const char *list)
 	return untexted;
 }
 
-// write_sdc writes a -name raw up to the next option, a journal or kept text braces it
+// write_sdc writes a -name raw up to the next option
+// a journal or kept text braces it
 void joinName(std::vector<SdcWord> &words)
 {
 	size_t at = 0;
@@ -318,7 +320,8 @@ bool tightness(const SdcCommand &command, double &tight)
 	return true;
 }
 
-// opensta takes the later of two exceptions on a path that flatten made them share
+// flatten can make two exceptions share a path
+// OpenSTA takes the later one there
 void orderOverrides(std::vector<SdcCommand> &commands)
 {
 	std::vector<std::tuple<int, double, size_t>> order;

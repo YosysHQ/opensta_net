@@ -229,7 +229,7 @@ void linkOrSync(Design *design, const PassOptions &opt)
 		the_sta->epochs.link(design);
 		return;
 	}
-	// Passes may have run since the last call
+	// passes may have run since the last call
 	if (!opt.sync && the_sta->epochs.stale())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
@@ -258,7 +258,7 @@ void checkSourced(bool ok, const std::string &file)
 		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
-// A .ys line keeps the quotes of -eval "a b": drop one pair
+// a .ys line keeps the quotes of -eval "a b", drop one pair
 std::string unquote(const std::string &arg)
 {
 	if (arg.size() >= 2 && arg.front() == '"' && arg.back() == '"')

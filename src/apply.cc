@@ -1,5 +1,4 @@
-// the rebuild resolves the refs and applies each command in its mode, clocks and library objects apply by name
-// a command that loses or changes its meaning is logged with the reason
+// resolve and apply, see resolveAndApply
 #include "opensta_net.h"
 
 #include "sta/Mode.hh"
@@ -68,7 +67,7 @@ bool applyCommand(const SdcCommand &command, std::string &reason)
 	return true;
 }
 
-// a getter of barrier instance pins only, opensta ignores their clock attributes
+// a getter of barrier instance pins only, OpenSTA ignores their clock attributes
 bool onlyBarrierInstancePins(const SdcWord &word)
 {
 	for (SdcObjectRef *ref : word.refs) {
@@ -78,7 +77,8 @@ bool onlyBarrierInstancePins(const SdcWord &word)
 	return true;
 }
 
-// sets [info script] and returns the last one, sta_warn and sta_error add its file and line to a message
+// sets [info script], returns the old one
+// sta_warn and sta_error add the script file and line to messages
 std::string swapInfoScript(const std::string &script)
 {
 	tclEval("info script");

@@ -1,9 +1,4 @@
-// before each pass or rtlil edit the epoch ends:
-// 1. write_sdc writes the constraints, objects as tokens
-// 2. each token becomes a ref, which anchors its rtlil objects
-// 3. passes carry the anchors
-// 4. the first query after a change opens the epoch: rebuild, then resolveAndApply
-// the trace keeps what write_sdc does not write and the commands since the epoch end (::ysta::record in trace.tcl)
+// epoch end, sync and link of the STA network, see opensta_net.h
 #include "opensta_net.h"
 
 #include <fstream>
@@ -100,6 +95,7 @@ bool Epochs::stale() const
 	return phase_ != Phase::Stopped && (!staNetwork().linked() || !staNetwork().view().upToDate());
 }
 
+// warns when the reason changes
 bool canBuild(Design *design)
 {
 	std::string reason;
@@ -195,6 +191,7 @@ void dropView()
 	the_sta->user_names.clear();
 }
 
+// a log_cmd_error in the build throws in a yosys command, else yosys exits
 bool linkView(Design *design, std::string &error)
 {
 	dropView();

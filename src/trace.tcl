@@ -1,8 +1,13 @@
-# Tcl side of opensta_net: guards, the constraint journal, apply helpers
+# the Tcl side of opensta_net, guards, journal and apply helpers
 namespace eval ::ysta {
+	# succeeded constraint commands since the last capture, sync or link
+	# ::ysta::record adds each as {mode cmd}
 	variable journal {}
+	# commands write_sdc skips, plus later commands of their family
+	# a sync apply records them again
 	variable kept {}
 	variable kept_families {}
+	# {mode pin} of each disable_pin, leaf pins too, undone before an unlink
 	variable hier_disables {}
 	# not written by write_sdc
 	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
@@ -23,9 +28,9 @@ namespace eval ::ysta {
 	variable property_types {Pin Instance Net Clock Port}
 }
 
-# Guards
+# guards
 
-# skip an empty first argument, opensta crashes on it
+# skip an empty first argument, OpenSTA crashes on it
 proc ::ysta::skip_empty {cmd first args} {
 	if {[llength $first]} { tailcall $cmd $first {*}$args }
 }
@@ -50,7 +55,8 @@ proc ::ysta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timesta
 	}
 	if {$failed} { return -options $options $err }
 }
-# open reads a name that starts with | as a pipeline, file normalize makes it a path
+# open reads a name starting with | as a pipeline
+# file normalize makes it a plain path
 proc ::ysta::copy_file {from to} {
 	set in [open [file normalize $from] rb]
 	try {
@@ -60,6 +66,7 @@ proc ::ysta::copy_file {from to} {
 		close $in
 	}
 }
+# deletes the written SDC lines that hold a stale_name
 proc ::ysta::drop_stale_lines {filename gzip} {
 	set channel [open [file normalize $filename] rb]
 	try {
@@ -91,7 +98,7 @@ foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd 
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
 
-# ---- Journal
+# journal
 
 # journal each command, keep the unwritten ones
 proc ::ysta::record {cmd code result op} {
@@ -130,9 +137,9 @@ proc ::ysta::drop_assigned {cmd code result op} {
 	set ::ysta::kept $kept
 }
 trace add execution ::sta::remove_delay_slew_annotations leave ::ysta::drop_assigned
-# OpenSTA keeps a hierarchical pin disable as wire edges in a set that orders pins by id,
-# so each one is undone while its pins live, a sync applies it again
-# no network call here: it can sync, and the sync would miss this pin. A leaf pin is undone too, the clear drops it anyway
+# OpenSTA keeps hier pin disables as wire edges, ordered by pin id
+# each is undone while its pins live, a sync reapplies it
+# no network call here, it can sync and miss this pin
 proc ::ysta::record_hier_disable {cmd code result op} {
 	if {$code == 0} { lappend ::ysta::hier_disables [list [::sta::cmd_mode_name] [lindex $cmd 1]] }
 }
@@ -184,7 +191,7 @@ proc ::ysta::unwritten {name cmd} {
 	}
 	return 0
 }
-# -activity as -density
+# set_power_activity -activity as -density over the min clock period
 proc ::ysta::activity_as_density {cmd} {
 	if {[namespace tail [lindex $cmd 0]] ne "set_power_activity"} { return $cmd }
 	set at [lsearch -exact $cmd -activity]
@@ -220,7 +227,7 @@ proc ::ysta::sdc_text {cmd} {
 	}
 	return [join $words " "]
 }
-# a getter by name
+# a get_* command that finds the object by name
 proc ::ysta::getter {obj} {
 	set type [::sta::object_type $obj]
 	switch $type {
@@ -237,14 +244,14 @@ proc ::ysta::getter {obj} {
 	}
 	error "no getter for $type"
 }
-# record the constraint commands
+# record each constraint command in the journal
 foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
 	if {[info commands ::sta::$cmd] ne {}} { trace add execution ::sta::$cmd leave ::ysta::record }
 }
 
-# Apply
+# apply
 
 # the edges between the pins, else the wire edges into froms
 proc ::ysta::edges {froms tos} {

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# run each test/<name>.tcl in its own yosys: bash test/run.sh [name...]
-# the log of each test goes to test/out/<name>.log
+# bash test/run.sh [name...] runs each test in its own yosys
 set -u
 cd "$(dirname "$0")/.."
 export YOSYS="${YOSYS:-$PWD/deps/yosys/build/yosys}"

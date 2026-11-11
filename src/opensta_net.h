@@ -17,10 +17,9 @@ namespace opensta_net {
 using Yosys::RTLIL::Design;
 
 struct YosysSta;
-extern YosysSta *the_sta;
+extern YosysSta *the_sta; // made by makeSta
 
-// Feeds a message to every log sink but the console, which the Tcl channel
-// serves, so STA and Tcl output keep their order there
+// logs to every sink but the console, the Tcl channel prints there
 struct NonConsoleTee {
 	const Yosys::LogMessage &msg;
 	void operator()(Yosys::LogSink &sink) const;
@@ -63,13 +62,15 @@ private:
 
 struct YosysSta : public sta::Sta {
 	ysta::YosysNetwork *yosys_network = nullptr;
-	// the constraints of the last epoch end
+
+	// from the last epoch end
 	EpochConstraints constraints;
 	// ref name per Barrier instance pin, set by sync, read by userName
 	std::map<ysta::Handle, std::string> user_names;
 	Yosys::NetTracker tracker;
 	// until -unprotect a $barrier keeps each ref through passes
 	bool track_barriers = true;
+
 	// sync
 	bool autosync = false;
 	Epochs epochs;
@@ -96,7 +97,7 @@ struct PassOptions {
 // Tcl
 bool tclEval(const std::string &script);
 
-// epoch.cc: epoch end, rebuild, link
+// see epoch.cc
 bool writeModeSdc(const std::string &mode, std::string &text);
 bool writeAllModes(SdcTextByMode &result);
 bool canBuild(Design *design);
@@ -111,7 +112,7 @@ int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 
-// Boot
+// boot
 bool tclFailure(const std::string &what, std::string &error);
 bool evalStaInit(Tcl_Interp *interp);
 bool makeSta(std::string &error);

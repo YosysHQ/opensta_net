@@ -1,6 +1,8 @@
 #ifndef YOSYS_NETWORK_HH
 #define YOSYS_NETWORK_HH
 
+// YosysNetwork shows one Yosys::NetView to OpenSTA
+
 #include "kernel/nettrack.h"
 
 #include "sta/ConcreteLibrary.hh"
@@ -23,17 +25,17 @@ namespace detail {
 constexpr std::string_view token_prefix = "__ysta_tok_";
 constexpr std::string_view stale_name = "\x01ysta_stale";
 
-// Names
+// names
 std::string staName(std::string_view raw);
 std::string staPath(const std::vector<std::string> &path);
 std::string staWireName(const Netlist::NetName &name);
 std::string staNetName(const Yosys::NetView &netlist, const Netlist::Net *net);
 sta::PortDirection *staDirection(Netlist::PortDir dir);
 
-// Order of ConcreteNetwork
+// pin order as ConcreteNetwork gives it
 void reversePortRuns(std::vector<Netlist::Pin *> &pins);
 
-// The net that an STA net name finds
+// the net that an STA net name finds
 struct NameClaim {
 	Netlist::Net *net = nullptr;
 	bool canonical = false; // the name of the net, else an alias
@@ -51,7 +53,7 @@ size_t scopeNetNames(const Yosys::NetView &netlist, const Netlist::Instance *sco
 
 using ScopeCells = std::map<std::string, sta::ConcreteCell *, std::less<>>;
 
-// Map value, or an empty one
+// the map value, or an empty one
 template <typename Map, typename K> const typename Map::mapped_type &lookup(const Map &map, const K &key)
 {
 	static const typename Map::mapped_type none{};
@@ -63,7 +65,7 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 
 } // namespace detail
 
-// The sta object types a handle stands for
+// the sta object types a handle stands for
 template <typename T>
 concept StaObject = 
 	std::is_same_v<std::remove_const_t<T>, sta::Instance> ||
@@ -71,11 +73,13 @@ concept StaObject =
 	std::is_same_v<std::remove_const_t<T>, sta::Net> ||
 	std::is_same_v<std::remove_const_t<T>, sta::Term>;
 
+// a view record id packed into an sta object pointer, see kernel/netview.h
+// OpenSTA gets only Handles, never record pointers
 struct Handle {
 	enum class Kind : uint8_t { Instance, Pin, Net, Term };
 	static constexpr uint32_t generation_mask = (1u << 29) - 1;
 
-	// 63    1
+	// 63    handle? (1 => handle)
 	// 61-62 kind
 	// 32-60 generation
 	// 0-31  record id
@@ -88,7 +92,7 @@ public:
 	Kind kind() const;
 	uint32_t generation() const;
 	uint32_t id() const;
-	std::string swigName() const; // the swig object name in tcl
+	std::string swigName() const; // the SWIG object name in Tcl
 	auto operator<=>(const Handle &) const = default;
 };
 
@@ -97,6 +101,7 @@ constexpr Handle::Kind recordKind(const YPin *) { return Handle::Kind::Pin; }
 constexpr Handle::Kind recordKind(const YNet *) { return Handle::Kind::Net; }
 template <typename Record> constexpr Handle::Kind record_kind = recordKind(static_cast<const Record *>(nullptr));
 
+// an object written as __ysta_tok_N, N indexes the token list
 // a TopPort token holds the top pin
 struct Token {
 	using Kind = Yosys::TrackedRef::Kind;
@@ -107,7 +112,7 @@ struct Token {
 
 namespace detail {
 
-// Iterator over a copied sequence
+// iterator over a copied sequence
 template <typename T> class SeqIterator : public sta::Iterator<T> {
 public:
 	explicit SeqIterator(std::vector<T> seq) : seq_(std::move(seq)) {}
@@ -126,6 +131,9 @@ template <typename T> sta::Iterator<T> *handleIterator(const std::vector<Handle>
 
 } // namespace detail
 
+// errors go through report_->error, which throws sta::Exception
+// token mode and stale names change what write_sdc writes
+// callers of write_sdc set them, apart from the link
 class YosysNetwork : public sta::ConcreteNetwork, public Netlist::CellLibrary {
 public:
 	using sta::ConcreteNetwork::name;
@@ -135,16 +143,24 @@ public:
 	// needs unlinked, builds cells, ports, name tables and a new handle generation
 	// returns how many nets share a name, linkView warns
 	size_t link(std::unique_ptr<Yosys::NetView> view);
+	// drops the view and the tables
+	// epoch.cc calls it before each link, after a throw in sync or link
 	void unlink();
+	// unlinked, top_cell_ and topInstance() are null, tables empty
+	// linked, tables map records to cells and ports, and names to records
 	bool linked() const;
 	Yosys::NetView &view() const; // of the link
 
+	// Netlist::CellLibrary from liberty cells
+	// NetView asks ports while it builds, an unmapped internal cell errors
+	// it asks the others on the linked view
 	bool ports(const YInstance &inst, std::vector<Netlist::Port> &out) override;
 	bool isRegister(const YInstance &inst) override;
 	bool isClockPin(const YPin &pin) override;
 	bool isBuffer(const YInstance &inst) override;
 
 	bool linkNetwork(std::string_view top_cell_name, bool make_black_boxes, sta::Report *report) override;
+	// OpenSTA asks before each network read, see Sta::ensureLinked
 	bool isLinked() const override;
 	// required, set once after construction, isLinked returns its result
 	// queryHook -> Epochs::syncForQuery, relinks if the design changed
@@ -165,8 +181,12 @@ public:
 	std::string pathName(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
+	// token mode while sink is set, see TokenScope
+	// non-top instances, pins, nets and scalar top ports get token names
 	void setTokenSink(std::vector<Token> *sink);
-	// TODO: write_sdc names the nets of earlier links stale_name: OpenSTA keeps their resistances and voltages
+	// stale names mode while on, set by ysta::stale_names around write_sdc
+	// old generation nets are stale_name in top, trace.tcl drops those lines
+	// TODO: OpenSTA keeps resistances and voltages of old nets, write_sdc names them stale_name
 	void setStaleNames(bool on);
 	bool staleNet(const sta::Net *net) const;
 	std::string token(Token::Kind kind, Handle handle) const;
@@ -196,13 +216,14 @@ public:
 	// Net
 	std::string name(const sta::Net *net) const override;
 	sta::ObjectId id(const sta::Net *net) const override;
+	// the claim winner in net_names_
 	sta::Net *findNet(const sta::Instance *instance, std::string_view net_name) const override;
 	void findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern, sta::NetSeq &matches) const override;
 	sta::Instance *instance(const sta::Net *net) const override;
 	sta::NetPinIterator *pinIterator(const sta::Net *net) const override;
 	sta::NetTermIterator *termIterator(const sta::Net *net) const override;
 
-	// Constant nets
+	// constant nets
 	bool isPower(const sta::Net *net) const override;
 	bool isGround(const sta::Net *net) const override;
 	sta::ConstantPinIterator *constantPinIterator() override;
@@ -210,10 +231,13 @@ public:
 	void setAttribute(sta::Instance *instance, std::string_view key, std::string_view value) override;
 	void readNetlistBefore() override;
 	void clear() override;
+	// error 2929, throws, the network stays
+	// the YosysSta edit overrides call it too, see opensta_net.cc
 	void refuseEdit(const char *what) const;
 
-	// Records
-	// a term is the pin, by Kind::Term
+	// records
+	// a Term is the inside of a scope pin, pin->inner
+	// its handle is the pin id with Kind::Term
 	template <typename Record> Handle handle(const Record *record, Handle::Kind kind = record_kind<Record>) const
 	{
 		if (record == nullptr)
@@ -228,6 +252,7 @@ public:
 			result.push_back(handle(record, kind));
 		return result;
 	}
+	// decodes a handle, unlinked or another generation is an error
 	template <typename Record> const Record *recordOf(Handle handle, Handle::Kind kind = record_kind<Record>) const
 	{
 		if (handle.bits == 0)
@@ -256,17 +281,19 @@ private:
 	void indexPins(YInstance *inst);
 	void refuseHandle() const;
 private:
+	// link and modes
 	std::unique_ptr<Yosys::NetView> view_;
-	uint32_t generation_ = 1;
+	uint32_t generation_ = 1; // link() bumps it, unlink() keeps it to refuse old handles
 	sta::Library *design_lib_ = nullptr;
 	sta::ConcreteCell *top_cell_ = nullptr;
 	std::vector<Token> *token_sink_ = nullptr; // token mode when set
 	mutable std::map<Token, size_t> token_index_;
-	bool stale_names_ = false;
+	bool stale_names_ = false; // see setStaleNames
 	bool (*open_epoch_hook_)() = nullptr;
+	// libraries of earlier links, OpenSTA can still point into them
 	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_;
 
-	// Cells and ports
+	// cells and ports
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
 	Netlist::IdMap<sta::ConcreteCell *> inst_cells_;
 	Netlist::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
@@ -274,7 +301,7 @@ private:
 	std::map<std::pair<uint32_t, const sta::ConcretePort *>, YPin *> port_pins_;
 	Netlist::IdMap<sta::VertexId> pin_vertex_ids_; // in the graph of this link
 
-	// Names, by instance id
+	// names by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
 	Netlist::IdMap<detail::NetNames>   net_names_;
 };

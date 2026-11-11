@@ -22,7 +22,8 @@ int resolveAndApply()
 		if (applyCommand(command, reason))
 			continue;
 		lost++;
-		log_warning("opensta_net: sync: `%s` lost or changed: %s\n", normalizeCommand(command.log_text).c_str(), reason.c_str());
+		std::string normalized = normalizeCommand(command.log_text);
+		log_warning("opensta_net: sync: `%s` lost or changed: %s\n", normalized.c_str(), reason.c_str());
 	}
 	// the scene sets its own mode
 	the_sta->setCmdScene(cmd_scene);

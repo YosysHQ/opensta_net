@@ -101,7 +101,10 @@ bool isThroughFlag(const std::string &word)
 // get_timing_edges -from X -to Y
 bool isEdgePair(const std::vector<SdcWord> &words)
 {
-	return words.size() == 5 && words[0].text == "get_timing_edges" && words[1].text == "-from" && words[3].text == "-to";
+	if (words.size() != 5)
+		return false;
+	bool from_to = words[1].text == "-from" && words[3].text == "-to";
+	return words[0].text == "get_timing_edges" && from_to;
 }
 
 bool isGetterList(const std::vector<SdcWord> &words)
@@ -295,7 +298,11 @@ Use useOf(const std::string &command, const std::string &flag, bool latency_sour
 // larger is tighter, the value is the last word, only -comment after it
 bool tightness(const SdcCommand &command, double &tight)
 {
-	static const dict<std::string, double> signs = {{"set_min_delay", 1}, {"set_max_delay", -1}, {"set_multicycle_path", -1}};
+	static const dict<std::string, double> signs = {
+		{"set_min_delay", 1},
+		{"set_max_delay", -1},
+		{"set_multicycle_path", -1}
+	};
 	const std::vector<SdcWord> &words = command.words;
 	if (words.empty() || !signs.count(words[0].text))
 		return false;

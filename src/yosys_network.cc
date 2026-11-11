@@ -108,7 +108,8 @@ void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
 	size_t begin = 0;
 	while (begin < pins.size()) {
 		size_t end = begin + 1;
-		while (end < pins.size() && pins[end]->inst == pins[begin]->inst && pins[end]->port_index == pins[begin]->port_index)
+		const Netlist::Pin *head = pins[begin];
+		while (end < pins.size() && pins[end]->inst == head->inst && pins[end]->port_index == head->port_index)
 			end++;
 		std::reverse(pins.begin() + begin, pins.begin() + end);
 		begin = end;
@@ -283,7 +284,7 @@ size_t YosysNetwork::link(std::unique_ptr<Yosys::NetView> view)
 	if (design_lib_ == nullptr)
 		design_lib_ = makeLibrary("verilog", "");
 	YInstance *top = view_->top();
-	top_cell_ = makeShapedCell(top->hdl_type, false, *top->ports);
+	top_cell_ = makeShapedCell(top->hdl_type, false, *top);
 	inst_cells_[top->id] = top_cell_;
 	indexPins(top);
 	detail::ScopeCells scope_cells;
@@ -379,7 +380,7 @@ sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope, detail::Scope
 	std::string key = scope->hdl_type + "\n" + std::to_string(view_->bodyKey(scope));
 	auto [it, fresh] = scope_cells.try_emplace(key, nullptr);
 	if (fresh)
-		it->second = makeShapedCell(freeCellName(scope), false, *scope->ports);
+		it->second = makeShapedCell(freeCellName(scope), false, *scope);
 	return it->second;
 }
 
@@ -432,15 +433,15 @@ sta::ConcreteCell *YosysNetwork::typeCell(const YInstance &inst)
 	if (lcell != nullptr)
 		ccell = reinterpret_cast<sta::ConcreteCell *>(cell(lcell));
 	else
-		ccell = makeShapedCell(inst.type, true, *inst.ports);
+		ccell = makeShapedCell(inst.type, true, inst);
 	type_cells_[inst.type] = ccell;
 	return ccell;
 }
 
-sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bool leaf, const std::vector<Netlist::Port> &shapes)
+sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bool leaf, const YInstance &inst)
 {
 	sta::Cell *scell = makeCell(design_lib_, cell_name, leaf, "");
-	for (const Netlist::Port &shape : shapes) {
+	for (const Netlist::Port &shape : *inst.ports) {
 		std::string port_name = detail::staName(shape.name);
 		sta::Port *port;
 		if (shape.scalar())
@@ -683,7 +684,8 @@ sta::NetPinIterator *YosysNetwork::pinIterator(const sta::Net *net) const
 sta::NetTermIterator *YosysNetwork::termIterator(const sta::Net *net) const
 {
 	const std::vector<YPin *> &ports = recordOf<YNet>(net)->boundary;
-	return detail::handleIterator<sta::Term *>(handles(std::vector<YPin *>(ports.rbegin(), ports.rend()), Handle::Kind::Term));
+	std::vector<YPin *> reversed_ports(ports.rbegin(), ports.rend());
+	return detail::handleIterator<sta::Term *>(handles(reversed_ports, Handle::Kind::Term));
 }
 
 bool YosysNetwork::isPower(const sta::Net *net) const

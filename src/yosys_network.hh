@@ -66,7 +66,7 @@ template <typename Map, typename K> const typename Map::mapped_type &lookup(cons
 // The sta object types a handle stands for
 template <typename T>
 concept StaObject = 
-	std::is_same_v<std::remove_const_t<T>, sta::Instance> || 
+	std::is_same_v<std::remove_const_t<T>, sta::Instance> ||
 	std::is_same_v<std::remove_const_t<T>, sta::Pin> ||
 	std::is_same_v<std::remove_const_t<T>, sta::Net> ||
 	std::is_same_v<std::remove_const_t<T>, sta::Term>;
@@ -220,7 +220,8 @@ public:
 			return {};
 		return {kind, generation_, record->id};
 	}
-	template <typename Record> std::vector<Handle> handles(const std::vector<Record *> &records, Handle::Kind kind = record_kind<Record>) const
+	template <typename Record>
+	std::vector<Handle> handles(const std::vector<Record *> &records, Handle::Kind kind = record_kind<Record>) const
 	{
 		std::vector<Handle> result;
 		for (const Record *record : records)
@@ -246,7 +247,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const std::vector<Netlist::Port> &shapes);
+	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const YInstance &inst);
 	void retireLibrary(sta::Library *library);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	size_t buildTables(YInstance *scope, detail::ScopeCells &scope_cells);
@@ -269,12 +270,13 @@ private:
 	std::map<std::string, sta::ConcreteCell *, std::less<>> type_cells_;
 	Netlist::IdMap<sta::ConcreteCell *> inst_cells_;
 	Netlist::IdMap<sta::ConcretePort *> pin_ports_; // scalar or bus bit
-	std::map<std::pair<uint32_t, const sta::ConcretePort *>, YPin *> port_pins_; // by instance id and port bit
+	// by instance id and port bit
+	std::map<std::pair<uint32_t, const sta::ConcretePort *>, YPin *> port_pins_;
 	Netlist::IdMap<sta::VertexId> pin_vertex_ids_; // in the graph of this link
 
 	// Names, by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
-	Netlist::IdMap<detail::NetNames> net_names_;
+	Netlist::IdMap<detail::NetNames>   net_names_;
 };
 
 // token mode while it lives, Epochs::capture makes one

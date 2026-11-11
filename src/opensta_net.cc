@@ -194,11 +194,19 @@ void bootSta()
 
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 {
-	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
-	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
-	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync},
-	                                             {"-autosync", &opt.autosync}, {"-protect", &opt.protect},
-	                                             {"-unprotect", &opt.unprotect}};
+	const std::map<std::string, std::string *> values = {
+		{"-eval", &opt.eval_cmd},
+		{"-liberty", &opt.liberty_file},
+	  {"-source", &opt.source_file},
+		{"-sdc", &opt.sdc_file}
+	};
+	const std::map<std::string, bool *> flags = {
+		{"-link", &opt.link},
+		{"-sync", &opt.sync},
+		{"-autosync", &opt.autosync},
+		{"-protect", &opt.protect},
+		{"-unprotect", &opt.unprotect}
+	};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -340,8 +348,10 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
 		checkSourced(tclEval("read_sdc {" + opt.sdc_file + "}"), opt.sdc_file);
-	if (!opt.source_file.empty())
-		checkSourced(tclEval("namespace eval ::sta {include_file {" + opt.source_file + "} 0 0}"), opt.source_file);
+	if (!opt.source_file.empty()) {
+		std::string include_script = "namespace eval ::sta {include_file {" + opt.source_file + "} 0 0}";
+		checkSourced(tclEval(include_script), opt.source_file);
+	}
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
 	setProtection(design, opt);

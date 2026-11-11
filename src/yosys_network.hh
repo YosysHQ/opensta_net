@@ -231,9 +231,6 @@ public:
 	void setAttribute(sta::Instance *instance, std::string_view key, std::string_view value) override;
 	void readNetlistBefore() override;
 	void clear() override;
-	// error 2929, throws, the network stays
-	// the YosysSta edit overrides call it too, see opensta_net.cc
-	void refuseEdit(const char *what) const;
 
 	// records
 	// a Term is the inside of a scope pin, pin->inner
@@ -279,6 +276,8 @@ private:
 	sta::ConcreteCell *scopeCell(const YInstance *scope, detail::ScopeCells &scope_cells);
 	std::string freeCellName(const YInstance *scope) const;
 	void indexPins(YInstance *inst);
+	// error 2929, throws, the network stays
+	void refuseEdit(const char *what) const;
 	void refuseHandle() const;
 private:
 	// link and modes

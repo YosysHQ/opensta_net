@@ -87,12 +87,14 @@ proc ::ysta::drop_stale_lines {filename gzip} {
 }
 if {[catch {rename ::sta::write_sdc_cmd ::sta::ysta_write_sdc_cmd} err]} { error "cannot wrap write_sdc_cmd: $err" }
 interp alias {} ::sta::write_sdc_cmd {} ::ysta::write_sdc_cmd
-foreach {cmd why} {
-	read_verilog_cmd {read_verilog: network edits are not supported, edit the design in yosys.}
-	clear_network {clear_network: network edits are not supported, edit the design in yosys.}
-	network_changed {network_changed: it would clear the constraints, opensta_net -sync rebuilds the network.}
-	delete_all_memory {delete_all_memory: the STA instance belongs to opensta_net.}
-} { proc ::sta::$cmd {args} [list error "Error: 2929 $why"] }
+# make_instance_cmd to make_port_pin_cmd are of NetworkEdit.i
+foreach {why cmds} {
+	{network edits are not supported, edit the design in yosys.}
+	{read_verilog_cmd clear_network make_instance_cmd delete_instance_cmd replace_cell_cmd make_net_cmd
+	 delete_net_cmd connect_pin_cmd disconnect_pin_cmd make_port_pin_cmd}
+	{it would clear the constraints, opensta_net -sync rebuilds the network.} network_changed
+	{the STA instance belongs to opensta_net.} delete_all_memory
+} { foreach cmd $cmds { proc ::sta::$cmd {args} [list error "Error: 2929 [regsub {_cmd$} $cmd {}]: $why"] } }
 # autosync after an edit
 foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_yosys }
 # end the epoch before a tcl edit

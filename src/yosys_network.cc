@@ -125,12 +125,9 @@ void detail::claimName(RankedClaims &claims, const Netlist::NetName &name, Netli
 	RankedClaim &owner = it->second;
 	if (added)
 		return;
-	if (canonical != owner.claim.canonical) {
-		if (canonical)
-			owner = ranked;
-		return;
-	}
-	if (std::tie(ranked.wire, ranked.index) < std::tie(owner.wire, owner.index))
+	bool alias = !canonical;
+	bool owner_alias = !owner.claim.canonical;
+	if (std::tie(alias, name.wire, name.index) < std::tie(owner_alias, owner.wire, owner.index))
 		owner = ranked;
 }
 
@@ -210,16 +207,6 @@ void YosysNetwork::setTokenSink(std::vector<Token> *sink)
 	token_index_.clear();
 }
 
-TokenScope::TokenScope(YosysNetwork &network, std::vector<Token> &tokens) : network(network)
-{
-	network.setTokenSink(&tokens);
-}
-
-TokenScope::~TokenScope()
-{
-	network.setTokenSink(nullptr);
-}
-
 void YosysNetwork::setStaleNames(bool on)
 {
 	stale_names_ = on;
@@ -285,11 +272,9 @@ size_t YosysNetwork::link(std::unique_ptr<Yosys::NetView> view)
 	generation_ = (generation_ + 1) & Handle::generation_mask;
 	view_ = std::move(view);
 	// named as OpenSTA's verilog reader library
-	// null here unless a link threw before top_cell_ and we skipped unlink()
-	if (design_lib_ == nullptr)
-		design_lib_ = makeLibrary("verilog", "");
+	design_lib_ = makeLibrary("verilog", "");
 	YInstance *top = view_->top();
-	top_cell_ = makeShapedCell(top->hdl_type, false, *top);
+	top_cell_ = makeShapedCell(top->hdl_type, *top);
 	inst_cells_[top->id] = top_cell_;
 	indexPins(top);
 	detail::ScopeCells scope_cells;
@@ -302,8 +287,12 @@ size_t YosysNetwork::link(std::unique_ptr<Yosys::NetView> view)
 void YosysNetwork::unlink()
 {
 	// the cells and ports outlive the link
-	if (design_lib_ != nullptr)
-		retireLibrary(design_lib_);
+	if (design_lib_ != nullptr) {
+		sta::ConcreteLibrary *clib = reinterpret_cast<sta::ConcreteLibrary *>(design_lib_);
+		library_map_.erase(clib->name());
+		library_seq_.erase(std::ranges::find(library_seq_, clib));
+		retired_libs_.emplace_back(clib);
+	}
 	design_lib_ = nullptr;
 	top_cell_ = nullptr;
 	type_cells_.clear();
@@ -385,7 +374,7 @@ sta::ConcreteCell *YosysNetwork::scopeCell(const YInstance *scope, detail::Scope
 	std::string key = scope->hdl_type + "\n" + std::to_string(view_->bodyKey(scope));
 	auto [it, fresh] = scope_cells.try_emplace(key, nullptr);
 	if (fresh)
-		it->second = makeShapedCell(freeCellName(scope), false, *scope);
+		it->second = makeShapedCell(freeCellName(scope), *scope);
 	return it->second;
 }
 
@@ -438,14 +427,14 @@ sta::ConcreteCell *YosysNetwork::typeCell(const YInstance &inst)
 	if (lcell != nullptr)
 		ccell = reinterpret_cast<sta::ConcreteCell *>(cell(lcell));
 	else
-		ccell = makeShapedCell(inst.type, true, inst);
+		ccell = makeShapedCell(inst.type, inst);
 	type_cells_[inst.type] = ccell;
 	return ccell;
 }
 
-sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bool leaf, const YInstance &inst)
+sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, const YInstance &inst)
 {
-	sta::Cell *scell = makeCell(design_lib_, cell_name, leaf, "");
+	sta::Cell *scell = makeCell(design_lib_, cell_name, inst.isLeaf(), "");
 	for (const Netlist::Port &shape : *inst.ports) {
 		std::string port_name = detail::staName(shape.name);
 		sta::Port *port;
@@ -456,14 +445,6 @@ sta::ConcreteCell *YosysNetwork::makeShapedCell(const std::string &cell_name, bo
 		setDirection(port, detail::staDirection(shape.dir));
 	}
 	return reinterpret_cast<sta::ConcreteCell *>(scell);
-}
-
-void YosysNetwork::retireLibrary(sta::Library *library)
-{
-	sta::ConcreteLibrary *clib = reinterpret_cast<sta::ConcreteLibrary *>(library);
-	library_map_.erase(clib->name());
-	library_seq_.erase(std::ranges::find(library_seq_, clib));
-	retired_libs_.emplace_back(clib);
 }
 
 sta::Instance *YosysNetwork::topInstance() const

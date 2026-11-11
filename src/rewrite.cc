@@ -14,23 +14,17 @@ namespace opensta_net {
 RenderedCommand renderCommand(const SdcCommand &command)
 {
 	RenderState render;
-	const std::vector<SdcWord> &words = command.words;
+	const SdcWords &words = command.words;
 	if (words.empty()) {
-		render.result.script = command.text;
+		render.result.script = command.log_text;
 		return std::move(render.result);
 	}
 	for (size_t i = 0; i + 1 < words.size(); i++) {
 		if (words[i].text == "-from")
 			render.words_after_from.push_back(unwrapped(words[i + 1].text, '{', '}'));
 	}
-	for (size_t i = 0; i < words.size(); i++) {
-		if (std::optional<std::string> flag_and_getter = renderFlagAndGetterBehindNewLogic(words, i, render)) {
-			appendSpaced(render.result.script, *flag_and_getter);
-			i++; // the getter went with its flag
-		} else {
-			appendSpaced(render.result.script, renderTopWord(words, i, render));
-		}
-	}
+	for (size_t i = 0; i < words.size(); i++)
+		appendSpaced(render.result.script, renderTopWord(words, i, render));
 	noteMovedRefs(words, render);
 	return std::move(render.result);
 }
@@ -38,7 +32,7 @@ RenderedCommand renderCommand(const SdcCommand &command)
 // refs flatten moved inside that no use put on stand-ins
 // a clock on an input pin flatten moved inside keeps its meaning
 // words is not empty, renderCommand checks
-void noteMovedRefs(const std::vector<SdcWord> &words, RenderState &render)
+void noteMovedRefs(const SdcWords &words, RenderState &render)
 {
 	bool clock = isClockCommand(words[0].text);
 	for (SdcObjectRef *ref : refsOf(words)) {
@@ -57,7 +51,7 @@ std::string renamedPort(const std::vector<SdcObjectRef *> &refs, const std::stri
 	std::string old_name = unwrapped(text, '{', '}');
 	std::string port;
 	for (SdcObjectRef *ref : refs) {
-		for (const auto &[old_port, old_bit, pin] : ref->result.port_renames) {
+		for (const auto &[old_port, pin] : ref->result.port_renames) {
 			if (old_port == old_name)
 				port = "{" + pin->port().name + "}";
 		}
@@ -65,11 +59,11 @@ std::string renamedPort(const std::vector<SdcObjectRef *> &refs, const std::stri
 	return port;
 }
 
-std::vector<ysta::Handle> renamedCells(const SdcObjectRef &ref, const std::vector<std::string> &words_after_from)
+Handles renamedCells(const SdcObjectRef &ref, const std::vector<std::string> &words_after_from)
 {
-	std::vector<ysta::Handle> cells;
+	Handles cells;
 	for (const std::string &from_port : words_after_from) {
-		for (const auto &[old_port, old_bit, pin] : ref.result.port_renames) {
+		for (const auto &[old_port, pin] : ref.result.port_renames) {
 			if (old_port == from_port)
 				cells.push_back(staNetwork().handle(pin->inst));
 		}
@@ -77,37 +71,30 @@ std::vector<ysta::Handle> renamedCells(const SdcObjectRef &ref, const std::vecto
 	return cells;
 }
 
-// a flag and its getter behind new logic, else none
-std::optional<std::string> renderFlagAndGetterBehindNewLogic(const SdcWords &words, size_t at, RenderState &render)
-{
-	const SdcWord &flag = words[at];
-	if (at + 1 == words.size() || !anyBehindNewLogic(words[at + 1]))
-		return std::nullopt;
-	const SdcWord &getter = words[at + 1];
-	// -to behind new logic becomes -through the old signal -to the exact pins
-	// e.g. a mux before D
-	if (getter.use == Use::Endpoint) {
-		std::string old_signal = renderGetter(getter, Use::Through, Pins::ByUse, render);
-		std::string exact_pins = renderGetter(getter, Use::Through, Pins::Exact, render);
-		return "-through " + old_signal + " " + flag.text + " " + exact_pins;
-	}
-	// -rise_from behind new logic takes the edge of the old signal
-	// e.g. an inverter before C
-	bool edge = flag.text == "-rise_from" || flag.text == "-fall_from";
-	if (getter.use == Use::Start && edge) {
-		std::string old_signal = renderGetter(getter, Use::Start, Pins::ByUse, render);
-		std::string exact_pins = renderGetter(getter, Use::Start, Pins::Exact, render);
-		return "[::ysta::start_edge " + flag.text + " " + old_signal + "] " + exact_pins;
-	}
-	return std::nullopt;
-}
-
-// a top level word, a getter behind new logic or renamed port
-std::string renderTopWord(const std::vector<SdcWord> &words, size_t at, RenderState &render)
+// a top level word, behind new logic or a renamed port
+std::string renderTopWord(const SdcWords &words, size_t at, RenderState &render)
 {
 	const SdcWord &word = words[at];
+	if (at + 1 < words.size() && anyBehindNewLogic(words[at + 1])) {
+		const SdcWord &getter = words[at + 1];
+		// -to behind new logic becomes -through the old signal -to the exact pins
+		// e.g. a mux before D
+		if (getter.use == Use::Endpoint)
+			return "-through " + renderGetter(getter, Use::Through, Pins::ByUse, render) + " " + word.text;
+		// -rise_from behind new logic takes the edge of the old signal
+		// e.g. an inverter before C
+		bool edge = word.text == "-rise_from" || word.text == "-fall_from";
+		if (getter.use == Use::Start && edge) {
+			std::string old_signal = renderGetter(getter, Use::Start, Pins::ByUse, render);
+			return "[::ysta::start_edge " + word.text + " " + old_signal + "]";
+		}
+	}
+	// the exact pins follow the old signal of the flag
+	// only a word after a from or to flag has these uses
 	if (anyBehindNewLogic(word) && word.use == Use::Start)
 		return renderGetter(word, Use::Start, Pins::Exact, render);
+	if (anyBehindNewLogic(word) && word.use == Use::Endpoint)
+		return renderGetter(word, Use::Through, Pins::Exact, render);
 	std::string port;
 	if (at > 0 && (words[at - 1].text == "-from" || words[at - 1].text == "-to"))
 		port = renamedPort(refsOf(words), word.text);
@@ -136,16 +123,7 @@ bool anyBehindNewLogic(const SdcWord &word)
 	return false;
 }
 
-bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)
-{
-	for (const SdcWord &word : words) {
-		if (word.text == flag)
-			return true;
-	}
-	return false;
-}
-
-std::vector<ysta::Handle> standIns(const SdcObjectRef &ref, Use use, const std::vector<ysta::Handle> &found)
+Handles standIns(const SdcObjectRef &ref, Use use, const Handles &found)
 {
 	using PortDir = Netlist::PortDir;
 	const TrackedRef::Result &result = ref.result;
@@ -174,31 +152,23 @@ std::vector<ysta::Handle> standIns(const SdcObjectRef &ref, Use use, const std::
 }
 
 // the loads inside a hierarchical input pin, plus its barrier y pins
-std::vector<ysta::Handle> loadsInside(const SdcObjectRef &ref)
+Handles loadsInside(const SdcObjectRef &ref)
 {
-	std::vector<ysta::Handle> loads;
-	if (ref.result.flattened_hier_pin)
-		loads = handlesOf(ref.pins);
-	else
-		loadsBehindPins(ref.pins, loads);
+	Handles loads;
+	for (const Netlist::Pin *pin : ref.pins) {
+		if (ref.result.flattened_hier_pin) {
+			loads.push_back(staNetwork().handle(pin));
+		} else if (pin->inner != nullptr) {
+			// the leaf loads inside the hierarchical pin
+			Handles inner = handlesOf(staNetwork().view().leafPins(pin->inner, Netlist::WalkTarget::Loads));
+			loads.insert(loads.end(), inner.begin(), inner.end());
+		}
+	}
 	if (loads.empty())
 		return handlesOf(ref.pins);
-	std::vector<ysta::Handle> barrier_y_pins = handlesOf(ref.result.barrier_y_pins);
+	Handles barrier_y_pins = handlesOf(ref.result.barrier_y_pins);
 	loads.insert(loads.end(), barrier_y_pins.begin(), barrier_y_pins.end());
 	return loads;
-}
-
-// the leaf loads inside hierarchical pins
-void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<ysta::Handle> &loads)
-{
-	for (const Netlist::Pin *pin : pins) {
-		if (pin->inner == nullptr)
-			continue;
-		const NetView &view = staNetwork().view();
-		std::vector<Netlist::Pin *> leaves = view.leafPins(pin->inner, Netlist::WalkTarget::Loads);
-		std::vector<ysta::Handle> inner = handlesOf(leaves);
-		loads.insert(loads.end(), inner.begin(), inner.end());
-	}
 }
 
 // found clocks of a get_clocks or a list of them
@@ -249,13 +219,13 @@ std::string portByName(const std::string &name)
 	return "[get_ports " + tclQuoted(name) + "]";
 }
 
-void noteBarrierPinNames(const SdcObjectRef &ref, const std::vector<ysta::Handle> &objects, RenderedCommand &rendered)
+void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects)
 {
 	for (ysta::Handle handle : objects) {
 		if (handle.kind() != ysta::Handle::Kind::Pin)
 			continue;
 		if (staNetwork().recordOf<Netlist::Pin>(handle)->inst->kind == Netlist::Instance::Kind::Barrier)
-			rendered.barrier_pin_names.emplace_back(handle, ref.name);
+			the_sta->user_names[handle] = ref.name;
 	}
 }
 

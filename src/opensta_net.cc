@@ -43,9 +43,9 @@ void YosysSta::makeReport()
 
 void YosysSta::makeNetwork()
 {
-	yosys_network = new ysta::YosysNetwork;
-	yosys_network->setOpenEpochHook(queryHook);
-	network_ = yosys_network;
+	ysta::YosysNetwork *network = new ysta::YosysNetwork;
+	network->setOpenEpochHook(queryHook);
+	network_ = network;
 }
 
 bool tclEval(const std::string &script)
@@ -83,14 +83,8 @@ int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[
 	int on = 0;
 	if (objc != 2 || Tcl_GetBooleanFromObj(interp, objv[1], &on) != TCL_OK)
 		return TCL_ERROR;
-	the_sta->yosys_network->setStaleNames(on);
+	staNetwork().setStaleNames(on);
 	return TCL_OK;
-}
-
-bool tclFailure(const std::string &what, std::string &error)
-{
-	error = what + ": " + Tcl_GetStringResult(yosys_get_tcl_interp());
-	return false;
 }
 
 bool evalStaInit(Tcl_Interp *interp)
@@ -101,7 +95,7 @@ bool evalStaInit(Tcl_Interp *interp)
 	return ok;
 }
 
-bool makeSta(std::string &error)
+void makeSta()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	sta::initSta();
@@ -111,15 +105,14 @@ bool makeSta(std::string &error)
 	the_sta->setTclInterp(interp);
 	the_sta->setThreadCount(1);
 	if (Sta_Init(interp) != TCL_OK)
-		return tclFailure("Sta_Init failed", error);
+		log_error("OpenSTA: Sta_Init failed: %s\n", Tcl_GetStringResult(interp));
 	if (!evalStaInit(interp))
-		return tclFailure("the init scripts failed", error);
+		log_error("OpenSTA: the init scripts failed: %s\n", Tcl_GetStringResult(interp));
 	if (!tclEval("init_sta_cmds"))
-		return tclFailure("init_sta_cmds failed", error);
-	return true;
+		log_error("OpenSTA: init_sta_cmds failed: %s\n", Tcl_GetStringResult(interp));
 }
 
-bool bootTcl(std::string &error)
+void bootTcl()
 {
 	static const char *script =
 #include "trace.inc"
@@ -128,19 +121,16 @@ bool bootTcl(std::string &error)
 	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::stale_names", tclStaleNames, nullptr, nullptr);
-	if (tclEval(script))
-		return true;
-	error = Tcl_GetStringResult(interp);
-	return false;
+	if (!tclEval(script))
+		log_error("OpenSTA: %s\n", Tcl_GetStringResult(interp));
 }
 
 void bootSta()
 {
 	if (the_sta != nullptr)
 		return;
-	std::string error;
-	if (!makeSta(error) || !bootTcl(error))
-		log_error("OpenSTA: %s\n", error.c_str());
+	makeSta();
+	bootTcl();
 	Pass::pre_call_hooks.push_back(beforePass);
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
@@ -172,7 +162,8 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 		else
 			break;
 	}
-	opt.eval_cmd = unquote(opt.eval_cmd);
+	// a .ys line keeps the quotes of -eval "a b", drop one pair
+	opt.eval_cmd = unwrapped(opt.eval_cmd, '"', '"');
 	return argidx;
 }
 
@@ -211,14 +202,6 @@ void checkSourced(bool ok, const std::string &file)
 		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
-// a .ys line keeps the quotes of -eval "a b", drop one pair
-std::string unquote(const std::string &arg)
-{
-	if (arg.size() >= 2 && arg.front() == '"' && arg.back() == '"')
-		return arg.substr(1, arg.size() - 2);
-	return arg;
-}
-
 void evalTcl(const std::string &cmd)
 {
 	bool ok = tclEval(cmd);
@@ -227,16 +210,6 @@ void evalTcl(const std::string &cmd)
 		log_cmd_error("OpenSTA tcl error: %s\n", result);
 	if (result[0] != 0)
 		log("%s\n", result);
-}
-
-// the sync after -unprotect applies the constraints by the anchors only
-void setProtection(Design *design, const PassOptions &opt)
-{
-	if (opt.protect)
-		the_sta->track_barriers = true;
-	if (!opt.unprotect)
-		return;
-	the_sta->epochs.unprotect(design);
 }
 
 OpenstaNetPass::OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}
@@ -307,7 +280,11 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	}
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
-	setProtection(design, opt);
+	// the sync after -unprotect applies the constraints by the anchors only
+	if (opt.protect)
+		the_sta->track_barriers = true;
+	if (opt.unprotect)
+		the_sta->epochs.unprotect(design);
 }
 
 OpenstaNetPass opensta_net_pass;

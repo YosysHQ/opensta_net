@@ -48,13 +48,13 @@ bool Epochs::capture()
 	std::vector<ysta::Token> tokens;
 	// the only token mode, for write_sdc and the trace texts
 	// the parse below names objects by name
-	std::optional<ysta::TokenScope> token_mode(std::in_place, staNetwork(), tokens);
+	staNetwork().setTokenSink(&tokens);
 	bool written = writeAllModes(modes);
 	const char *list = "journal";
 	if (written)
 		list = "kept";
 	int untexted = appendTraceTexts(modes, list);
-	token_mode.reset();
+	staNetwork().setTokenSink(nullptr);
 	if (written)
 		the_sta->constraints = {};
 	bool journaled = written || untexted == 0;
@@ -172,16 +172,9 @@ void warnDroppedParasitics()
 	}
 }
 
-void warnSharedNames(size_t shared)
-{
-	if (shared > 0)
-		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that "
-		            "name finds the other net.\n", shared);
-}
-
 void dropView()
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
+	ysta::YosysNetwork *network = &staNetwork();
 	if (network->linked()) {
 		// before the pins of this view go, in the mode of each disable
 		tclEval("::ysta::undo_hier_disables");
@@ -196,7 +189,7 @@ bool linkView(Design *design, std::string &error)
 {
 	dropView();
 	auto t0 = std::chrono::steady_clock::now();
-	ysta::YosysNetwork *network = the_sta->yosys_network;
+	ysta::YosysNetwork *network = &staNetwork();
 	size_t shared_names = 0;
 	try {
 		pool<const Cell *> barriers = the_sta->tracker.barrierInstances(design);
@@ -207,7 +200,9 @@ bool linkView(Design *design, std::string &error)
 		error = exception.what();
 		return false;
 	}
-	warnSharedNames(shared_names);
+	if (shared_names > 0)
+		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that "
+		            "name finds the other net.\n", shared_names);
 	long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 	auto [insts, nets, pins] = network->view().counts();
 	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);

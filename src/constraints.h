@@ -6,8 +6,6 @@
 
 #include <tcl.h>
 
-#include <optional>
-
 #include "yosys_network.hh"
 
 namespace opensta_net {
@@ -24,7 +22,7 @@ struct SdcObjectRef : Yosys::TrackedRef {
 
 ysta::YosysNetwork &staNetwork(); // of the_sta
 
-template <typename T> std::vector<ysta::Handle> handlesOf(const std::vector<T *> &records)
+template <typename T> Handles handlesOf(const std::vector<T *> &records)
 {
 	return staNetwork().handles(records);
 }
@@ -56,12 +54,6 @@ enum class Pins : uint8_t {
 	Exact  // own_pins
 };
 
-// the hint markRefs sets
-enum class RefMark : uint8_t {
-	IsolateCell,   // hints.keep_cell on the arc ends of get_timing_edges
-	KeepAsInstance // hints.keep_as_instance on the pins of a clock command
-};
-
 // one Tcl word of a command
 struct SdcWord {
 	std::string text;
@@ -74,23 +66,21 @@ using SdcWords = std::vector<SdcWord>;
 
 struct SdcCommand {
 	std::string mode;
-	std::string text; // with tokens
-	std::string log_text;
-	std::vector<SdcWord> words;
+	std::string log_text; // also the script of a command that did not parse
+	SdcWords words;
 };
 
 // a command rendered on the found objects, plus what it lost
 struct RenderedCommand {
 	std::string script;
 	// a getter of only Barrier instance pins does not count
+	// OpenSTA ignores the clock attributes of these pins
 	bool empty_getter = false;  // a getter or clock getter rendered nothing
 	bool refs_rendered = false; // a getter rendered a ref
 	std::string missing;        // refs and clocks that found no object
 	std::string moved;          // refs on a hierarchical pin flatten removed
 	bool found = false;
 	bool to_drivers = false;    // -unprotect moved refs to the drivers
-	// Barrier instance pins it took, with their ref names
-	std::vector<std::pair<ysta::Handle, std::string>> barrier_pin_names = {};
 };
 
 // one per renderCommand
@@ -124,7 +114,6 @@ std::vector<std::string> sdcCommands(const std::string &text);
 std::string normalizeCommand(const std::string &cmd);
 std::string commandName(const std::string &script);
 bool isClockCommand(const std::string &name);
-bool isThroughFlag(const std::string &word);
 bool isEdgePair(const SdcWords &words);
 bool isGetterList(const SdcWords &words);
 // SDC text by mode -> commands of words, getter tokens -> refs
@@ -132,7 +121,6 @@ void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &t
 // list is "journal" or "kept", see trace.tcl
 int appendTraceTexts(SdcTextByMode &modes, const char *list);
 void joinName(SdcWords &words);
-void markRefs(const SdcWords &words, RefMark mark);
 void assignUses(SdcWords &words, const std::string &command, bool latency_source);
 void assignUse(SdcWords &words, Use use);
 Use useOf(const std::string &command, const std::string &flag, bool latency_source);
@@ -158,29 +146,26 @@ void noteMovedRefs(const SdcWords &words, RenderState &render);
 std::string renamedPort(const std::vector<SdcObjectRef *> &refs, const std::string &text);
 // cells of the new ports abc gave a -from arc port
 Handles renamedCells(const SdcObjectRef &ref, const std::vector<std::string> &words_after_from);
-std::optional<std::string> renderFlagAndGetterBehindNewLogic(const SdcWords &words, size_t at, RenderState &render);
 std::string renderTopWord(const SdcWords &words, size_t at, RenderState &render);
 // set_disable_timing on a moved pin or removed cell as wire edges, else ""
 std::string disabledEdges(const SdcWord &word, RenderState &render);
 // see TrackedRef::isBehindNewLogic
 bool anyBehindNewLogic(const SdcWord &word);
-bool hasFlag(const SdcWords &words, const std::string &flag);
 // objects that take a ref's use in place of its found objects
 // e.g. -through moved output pin u1/y takes the loads beyond y
 Handles standIns(const SdcObjectRef &ref, Use use, const Handles &found);
 Handles loadsInside(const SdcObjectRef &ref);
-void loadsBehindPins(const std::vector<const Yosys::Netlist::Pin *> &pins, Handles &loads);
 std::string clockGetter(const SdcWord &word, RenderState &render); // "" when not a get_clocks word
 std::string clockByName(const std::string &name);
 std::string portByName(const std::string &name);
-void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects, RenderedCommand &rendered);
+// sets the user name of each Barrier instance pin, see userName
+void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects);
 void appendSpaced(std::string &text, const std::string &word);
 
 // apply
 // clocks and library objects apply by name
 int resolveAndApply(); // logs each lost or changed command, returns how many
-bool applyCommand(const SdcCommand &command, std::string &reason); // false when lost or changed
-bool onlyBarrierInstancePins(const SdcWord &word);
+std::string applyCommand(const SdcCommand &command); // why it is lost or changed, else ""
 std::string swapInfoScript(const std::string &script);
 
 } // namespace opensta_net

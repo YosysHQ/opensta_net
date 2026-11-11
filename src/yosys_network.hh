@@ -181,7 +181,7 @@ public:
 	std::string pathName(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Net *net) const override;
 	std::string name(const sta::Port *port) const override;
-	// token mode while sink is set, see TokenScope
+	// token mode while sink is set, see Epochs::capture
 	// non-top instances, pins, nets and scalar top ports get token names
 	void setTokenSink(std::vector<Token> *sink);
 	// stale names mode while on, set by ysta::stale_names around write_sdc
@@ -269,8 +269,7 @@ protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
 	sta::ConcreteCell *typeCell(const YInstance &inst);
-	sta::ConcreteCell *makeShapedCell(const std::string &name, bool leaf, const YInstance &inst);
-	void retireLibrary(sta::Library *library);
+	sta::ConcreteCell *makeShapedCell(const std::string &name, const YInstance &inst);
 	sta::ConcretePort *portOf(const YPin *pin) const;
 	size_t buildTables(YInstance *scope, detail::ScopeCells &scope_cells);
 	sta::ConcreteCell *scopeCell(const YInstance *scope, detail::ScopeCells &scope_cells);
@@ -303,14 +302,6 @@ private:
 	// names by instance id
 	Netlist::IdMap<detail::ChildNames> child_names_;
 	Netlist::IdMap<detail::NetNames>   net_names_;
-};
-
-// token mode while it lives, Epochs::capture makes one
-struct TokenScope {
-	TokenScope(YosysNetwork &network, std::vector<Token> &tokens);
-	~TokenScope();
-	TokenScope(const TokenScope &) = delete;
-	YosysNetwork &network;
 };
 
 } // namespace ysta

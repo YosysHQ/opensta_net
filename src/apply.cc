@@ -17,8 +17,8 @@ int resolveAndApply()
 	int lost = 0;
 	for (const SdcCommand &command : constraints.commands) {
 		the_sta->setCmdMode(command.mode);
-		std::string reason;
-		if (applyCommand(command, reason))
+		std::string reason = applyCommand(command);
+		if (reason.empty())
 			continue;
 		lost++;
 		std::string normalized = normalizeCommand(command.log_text);
@@ -33,48 +33,24 @@ int resolveAndApply()
 	return lost;
 }
 
-bool applyCommand(const SdcCommand &command, std::string &reason)
+std::string applyCommand(const SdcCommand &command)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	RenderedCommand rendered = renderCommand(command);
-	for (const auto &[handle, name] : rendered.barrier_pin_names)
-		the_sta->user_names[handle] = name;
 	// OpenSTA drops, narrows or changes a command with an empty getter
-	if (rendered.empty_getter) {
-		reason = "no object found for " + rendered.missing;
-		return false;
-	}
-	if (rendered.refs_rendered && !rendered.found) {
-		reason = "-unprotect removed the barrier that kept its hierarchical pin";
-		return false;
-	}
-	if (Tcl_EvalEx(interp, rendered.script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK) {
-		reason = std::string("failed: ") + Tcl_GetStringResult(interp);
-		return false;
-	}
-	if (!rendered.missing.empty()) {
-		reason = "applied without " + rendered.missing;
-		return false;
-	}
-	if (rendered.to_drivers) {
-		reason = "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
-		return false;
-	}
-	if (!rendered.moved.empty()) {
-		reason = "applied, flatten moved it to the leaf pins inside: " + rendered.moved;
-		return false;
-	}
-	return true;
-}
-
-// a getter of barrier instance pins only, OpenSTA ignores their clock attributes
-bool onlyBarrierInstancePins(const SdcWord &word)
-{
-	for (SdcObjectRef *ref : word.refs) {
-		if (!ref->origin.on_barrier_instance)
-			return false;
-	}
-	return true;
+	if (rendered.empty_getter)
+		return "no object found for " + rendered.missing;
+	if (rendered.refs_rendered && !rendered.found)
+		return "-unprotect removed the barrier that kept its hierarchical pin";
+	if (Tcl_EvalEx(interp, rendered.script.c_str(), -1, TCL_EVAL_GLOBAL) != TCL_OK)
+		return std::string("failed: ") + Tcl_GetStringResult(interp);
+	if (!rendered.missing.empty())
+		return "applied without " + rendered.missing;
+	if (rendered.to_drivers)
+		return "applied on the drivers of a hierarchical pin whose barrier -unprotect removed";
+	if (!rendered.moved.empty())
+		return "applied, flatten moved it to the leaf pins inside: " + rendered.moved;
+	return "";
 }
 
 // sets [info script], returns the old one

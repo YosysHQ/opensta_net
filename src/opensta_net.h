@@ -61,8 +61,6 @@ private:
 };
 
 struct YosysSta : public sta::Sta {
-	ysta::YosysNetwork *yosys_network = nullptr;
-
 	// from the last epoch end
 	EpochConstraints constraints;
 	// ref name per Barrier instance pin, set by sync, read by userName
@@ -93,7 +91,6 @@ bool writeModeSdc(const std::string &mode, std::string &text);
 bool writeAllModes(SdcTextByMode &result);
 bool canBuild(Design *design);
 void warnDroppedParasitics();
-void warnSharedNames(size_t shared);
 void dropView();
 bool linkView(Design *design, std::string &error);
 
@@ -104,10 +101,9 @@ int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 
 // boot
-bool tclFailure(const std::string &what, std::string &error);
 bool evalStaInit(Tcl_Interp *interp);
-bool makeSta(std::string &error);
-bool bootTcl(std::string &error);
+void makeSta();
+void bootTcl();
 void beforePass(Yosys::Pass *pass, Design *design);
 void bootSta();
 
@@ -116,9 +112,7 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
 void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
 void checkSourced(bool ok, const std::string &file);
-std::string unquote(const std::string &arg);
 void evalTcl(const std::string &cmd);
-void setProtection(Design *design, const PassOptions &opt);
 
 struct OpenstaNetPass : public Yosys::Pass {
 	OpenstaNetPass();

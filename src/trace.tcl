@@ -1,8 +1,13 @@
-# Tcl side of opensta_net: guards, the constraint journal, apply helpers
+# the Tcl side of opensta_net, guards, journal and apply helpers
 namespace eval ::ysta {
+	# succeeded constraint commands since the last capture, sync or link
+	# ::ysta::record adds each as {mode cmd}
 	variable journal {}
+	# commands write_sdc skips, plus later commands of their family
+	# a sync apply records them again
 	variable kept {}
 	variable kept_families {}
+	# {mode pin} of each disable_pin, leaf pins too, undone before an unlink
 	variable hier_disables {}
 	# not written by write_sdc
 	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
@@ -23,9 +28,9 @@ namespace eval ::ysta {
 	variable property_types {Pin Instance Net Clock Port}
 }
 
-# Guards
+# guards
 
-# skip an empty first argument, opensta crashes on it
+# skip an empty first argument, OpenSTA crashes on it
 proc ::ysta::skip_empty {cmd first args} {
 	if {[llength $first]} { tailcall $cmd $first {*}$args }
 }
@@ -50,7 +55,8 @@ proc ::ysta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timesta
 	}
 	if {$failed} { return -options $options $err }
 }
-# open reads a name that starts with | as a pipeline, file normalize makes it a path
+# open reads a name starting with | as a pipeline
+# file normalize makes it a plain path
 proc ::ysta::copy_file {from to} {
 	set in [open [file normalize $from] rb]
 	try {
@@ -60,6 +66,7 @@ proc ::ysta::copy_file {from to} {
 		close $in
 	}
 }
+# deletes the written SDC lines that hold a stale_name
 proc ::ysta::drop_stale_lines {filename gzip} {
 	set channel [open [file normalize $filename] rb]
 	try {
@@ -80,18 +87,20 @@ proc ::ysta::drop_stale_lines {filename gzip} {
 }
 if {[catch {rename ::sta::write_sdc_cmd ::sta::ysta_write_sdc_cmd} err]} { error "cannot wrap write_sdc_cmd: $err" }
 interp alias {} ::sta::write_sdc_cmd {} ::ysta::write_sdc_cmd
-foreach {cmd why} {
-	read_verilog_cmd {read_verilog: network edits are not supported, edit the design in yosys.}
-	clear_network {clear_network: network edits are not supported, edit the design in yosys.}
-	network_changed {network_changed: it would clear the constraints, opensta_net -sync rebuilds the network.}
-	delete_all_memory {delete_all_memory: the STA instance belongs to opensta_net.}
-} { proc ::sta::$cmd {args} [list error "Error: 2929 $why"] }
+# make_instance_cmd to make_port_pin_cmd are of NetworkEdit.i
+foreach {why cmds} {
+	{network edits are not supported, edit the design in yosys.}
+	{read_verilog_cmd clear_network make_instance_cmd delete_instance_cmd replace_cell_cmd make_net_cmd
+	 delete_net_cmd connect_pin_cmd disconnect_pin_cmd make_port_pin_cmd}
+	{it would clear the constraints, opensta_net -sync rebuilds the network.} network_changed
+	{the STA instance belongs to opensta_net.} delete_all_memory
+} { foreach cmd $cmds { proc ::sta::$cmd {args} [list error "Error: 2929 [regsub {_cmd$} $cmd {}]: $why"] } }
 # autosync after an edit
 foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_yosys }
 # end the epoch before a tcl edit
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
 
-# ---- Journal
+# journal
 
 # journal each command, keep the unwritten ones
 proc ::ysta::record {cmd code result op} {
@@ -130,15 +139,17 @@ proc ::ysta::drop_assigned {cmd code result op} {
 	set ::ysta::kept $kept
 }
 trace add execution ::sta::remove_delay_slew_annotations leave ::ysta::drop_assigned
-# OpenSTA keeps a hierarchical pin disable as wire edges in a set that orders pins by id,
-# so each one is undone while its pins live, a sync applies it again
-# no network call here: it can sync, and the sync would miss this pin. A leaf pin is undone too, the clear drops it anyway
+# OpenSTA keeps hier pin disables as wire edges, ordered by pin id
+# each is undone while its pins live, a sync reapplies it
+# no network call here, it can sync and miss this pin
 proc ::ysta::record_hier_disable {cmd code result op} {
 	if {$code == 0} { lappend ::ysta::hier_disables [list [::sta::cmd_mode_name] [lindex $cmd 1]] }
 }
 trace add execution ::sta::disable_pin leave ::ysta::record_hier_disable
-# 1 if it changed the cmd mode
+# we restore the cmd scene and mode if we changed the mode
 proc ::ysta::undo_hier_disables {} {
+	set scene [::sta::cmd_scene]
+	set cmd_mode [::sta::cmd_mode_name]
 	set disables $::ysta::hier_disables
 	set ::ysta::hier_disables {}
 	set changed 0
@@ -152,9 +163,11 @@ proc ::ysta::undo_hier_disables {} {
 		}
 		catch {::sta::unset_disable_pin $pin}
 	}
-	return $changed
+	if {$changed} {
+		::sta::set_cmd_scene $scene
+		::sta::set_cmd_mode $cmd_mode
+	}
 }
-proc ::ysta::kept_count {} { return [llength $::ysta::kept] }
 # {texts untexted} of kept or journal
 proc ::ysta::texts {which} {
 	set texts [dict create]
@@ -180,7 +193,7 @@ proc ::ysta::unwritten {name cmd} {
 	}
 	return 0
 }
-# -activity as -density
+# set_power_activity -activity as -density over the min clock period
 proc ::ysta::activity_as_density {cmd} {
 	if {[namespace tail [lindex $cmd 0]] ne "set_power_activity"} { return $cmd }
 	set at [lsearch -exact $cmd -activity]
@@ -216,7 +229,7 @@ proc ::ysta::sdc_text {cmd} {
 	}
 	return [join $words " "]
 }
-# a getter by name
+# a get_* command that finds the object by name
 proc ::ysta::getter {obj} {
 	set type [::sta::object_type $obj]
 	switch $type {
@@ -233,14 +246,14 @@ proc ::ysta::getter {obj} {
 	}
 	error "no getter for $type"
 }
-# record the constraint commands
+# record each constraint command in the journal
 foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
 	if {[info commands ::sta::$cmd] ne {}} { trace add execution ::sta::$cmd leave ::ysta::record }
 }
 
-# Apply
+# apply
 
 # the edges between the pins, else the wire edges into froms
 proc ::ysta::edges {froms tos} {
@@ -280,18 +293,4 @@ proc ::ysta::wire_edges {pins} {
 	}
 	if {$edges eq {}} { error "no wire edge into the pins" }
 	return $edges
-}
-# 1 if each edge into founds inverts and comes from an exact pin
-proc ::ysta::behind_inverter {founds exacts} {
-	set nets {}
-	foreach exact $exacts { lappend nets [get_full_name [get_nets -of_objects $exact]] }
-	foreach found $founds {
-		set edges [get_timing_edges -to $found]
-		if {$edges eq {}} { return 0 }
-		foreach edge $edges {
-			set net [get_full_name [get_nets -of_objects [$edge from_pin]]]
-			if {![::ysta::inverts $edge] || $net ni $nets} { return 0 }
-		}
-	}
-	return 1
 }

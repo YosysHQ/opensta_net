@@ -19,5 +19,6 @@ rebuild
 check_eq [assigned] {0.500000 0.700000 0.300000}
 sta::remove_delay_slew_annotations
 set removed [assigned]
+check_eq $removed {0.100000 0.050000 0.050000}
 rebuild
 check_eq [assigned] $removed

@@ -1,6 +1,7 @@
-# a netlist that another yosys wrote after its epoch end holds the anchors and the barriers of its own design
+# a netlist from another yosys holds its own anchors and barriers
 source test/lib/check.tcl
 set path test/out/foreign_anchors.il
+# the child writes it after its epoch end
 lassign [yosys_child "
 	source test/lib/check.tcl
 	link_top test/data/simple.v

@@ -1,5 +1,4 @@
-# 1025 x 1024 x 4096 pinless cells: more instance ids than 32 bits hold, the
-# link refuses
+# more instance ids than 32 bits hold, the link refuses
 source test/lib/check.tcl
 set file [open test/out/id_overflow.v w]
 puts $file "(* blackbox *) module fill(); endmodule"

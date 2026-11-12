@@ -1,11 +1,6 @@
-# a -reference_pin that a pass turns into several pins of one clock keeps one of them
+# a -reference_pin that becomes several pins of one clock keeps one
 source test/lib/check.tcl
-yosys read_verilog test/data/track.v
-yosys hierarchy -top top
-yosys synth -top top
-yosys dfflibmap -liberty $nangate
-yosys abc -liberty $nangate
-yosys opensta_net -liberty $nangate -link
+link_track
 create_clock -name clk -period 10 [get_ports clk]
 set_input_delay 1.5 -clock clk -reference_pin [get_pins u1/clk] [get_ports {in[3]}]
 yosys flatten

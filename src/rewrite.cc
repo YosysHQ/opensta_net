@@ -1,5 +1,4 @@
-// the words on the objects that passes moved, then the clock names, in the mode of the command
-// (a removed hierarchical pin goes on the leaf pins that opensta takes for it)
+// commands as scripts on the objects passes changed, see renderCommand
 #include "opensta_net.h"
 
 #include "sta/Mode.hh"
@@ -9,160 +8,110 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
-void rewriteWords(std::vector<SdcWord> &words)
+// renders on the found objects by handle, see refHandles
+// a broken command stays as its text
+// trace.tcl renders journal and kept commands via ::ysta::getter, tokens at capture
+RenderedCommand renderCommand(const SdcCommand &command)
 {
-	if (words.empty())
-		return;
-	remapArcPorts(words);
-	splitEndpoints(words);
-	disableWireEdges(words);
-	hierPinLoads(words);
-	invertClock(words);
-	applyClockPins(words);
-	singleReferencePin(words);
-	quoteClocks(words);
-}
-
-// abc maps a gate to cells: the arc takes their ports, only on the cells of the -from pins
-void remapArcPorts(std::vector<SdcWord> &words)
-{
+	RenderState render;
+	const SdcWords &words = command.words;
+	if (words.empty()) {
+		render.result.script = command.log_text;
+		return std::move(render.result);
+	}
 	for (size_t i = 0; i + 1 < words.size(); i++) {
-		if (words[i].text != "-from" && words[i].text != "-to")
-			continue;
-		std::string &text = words[i + 1].text;
-		std::string name = text;
-		if (text.size() > 2 && text.front() == '{')
-			name = text.substr(1, text.size() - 2);
-		ArcEnd end = ArcEnd::To;
 		if (words[i].text == "-from")
-			end = ArcEnd::From;
-		for (SdcObjectRef *ref : refsOf(words))
-			remapPort(*ref, name, end, text);
+			render.words_after_from.push_back(unwrapped(words[i + 1].text, '{', '}'));
+	}
+	for (size_t i = 0; i < words.size(); i++)
+		appendSpaced(render.result.script, renderTopWord(words, i, render));
+	noteMovedRefs(words, render);
+	return std::move(render.result);
+}
+
+// refs flatten moved inside that no use put on stand-ins
+// a clock on an input pin flatten moved inside keeps its meaning
+// words is not empty, renderCommand checks
+void noteMovedRefs(const SdcWords &words, RenderState &render)
+{
+	bool clock = isClockCommand(words[0].text);
+	for (SdcObjectRef *ref : refsOf(words)) {
+		bool clock_input = clock && ref->origin.hier_pin_dir == Netlist::PortDir::Input;
+		render.result.to_drivers |= ref->origin.anchored_on_drivers;
+		if (ref->result.flattened_hier_pin && !render.on_stand_ins.count(ref) && !clock_input)
+			appendSpaced(render.result.moved, ref->name);
 	}
 }
 
-void remapPort(SdcObjectRef &ref, const std::string &name, ArcEnd end, std::string &text)
+// abc maps a gate to cells
+// a -from or -to arc port takes its new port name
+// the last matching rename wins
+std::string renamedPort(const std::vector<SdcObjectRef *> &refs, const std::string &text)
 {
-	for (const auto &[old_port, old_bit, pin] : ref.result.port_renames) {
-		if (old_port != name)
-			continue;
-		text = "{" + pin->port().name + "}";
-		if (end == ArcEnd::From)
-			ref.use_objects.push_back(staNetwork().handle(pin->inst));
-	}
-}
-
-// a -to behind new logic (a mux before D): -through the old signal, -to the exact pins
-void splitEndpoints(std::vector<SdcWord> &words)
-{
-	static const pool<std::string> commands = {"set_false_path", "set_multicycle_path", "set_max_delay", "set_min_delay", "set_data_check", "group_path"};
-	if (!commands.count(words[0].text))
-		return;
-	bool check = words[0].text == "set_data_check";
-	for (size_t i = 1; i + 1 < words.size(); i++) {
-		bool to = words[i].text == "-to" || words[i].text == "-rise_to" || words[i].text == "-fall_to";
-		bool from = words[i].text == "-from" || words[i].text == "-rise_from" || words[i].text == "-fall_from";
-		if (!anyBehindNewLogic(words[i + 1]))
-			continue;
-		if (from)
-			exactStartPins(words, i);
-		if (!to)
-			continue;
-		SdcWord through = words[i + 1];
-		words[i + 1].pin_choice = PinChoice::ExactPins;
-		if (check)
-			continue;
-		words.insert(words.begin() + i, {SdcWord{"-through"}, through});
-		i += 2;
-	}
-}
-
-// a -from behind new logic (an inverter before C): the exact pin with the edge of the old signal
-void exactStartPins(std::vector<SdcWord> &words, size_t at)
-{
-	SdcWord found = words[at + 1];
-	words[at + 1].pin_choice = PinChoice::ExactPins;
-	if (words[at].text == "-from")
-		return;
-	SdcWord flag;
-	flag.kind = WordKind::Substitution;
-	flag.nested_words = {SdcWord{"::ysta::start_edge"}, SdcWord{words[at].text}, found};
-	words[at] = flag;
-}
-
-// a removed hierarchical pin or cell: the wire edges into the loads beyond its barriers
-void disableWireEdges(std::vector<SdcWord> &words)
-{
-	if (words[0].text != "set_disable_timing")
-		return;
-	for (SdcWord &word : words) {
-		if (word.refs.size() != 1)
-			continue;
-		SdcObjectRef &ref = *word.refs[0];
-		if (!ref.stillAsLeafPins() && !ref.removedButLoadsKept())
-			continue;
-		std::string handles;
-		for (const Netlist::Pin *pin : ref.result.loads_beyond)
-			handles += " " + swigHandle(staNetwork().handle(pin));
-		word.refs.clear();
-		word.kind = WordKind::Plain;
-		word.text = "[::ysta::wire_edges [list" + handles + "]]";
-		ref.inside_handled = true;
-	}
-}
-
-// a removed hierarchical pin in a case value or a -through
-void hierPinLoads(std::vector<SdcWord> &words)
-{
-	bool all = words[0].text == "set_case_analysis";
-	for (size_t i = 1; i < words.size(); i++) {
-		if (!all && !isThroughFlag(words[i - 1].text))
-			continue;
-		for (SdcObjectRef *ref : words[i].refs) {
-			if (ref->stillAsLeafPins() && ref->origin.hier_pin_dir == Netlist::PortDir::Output)
-				ref->use_objects = handlesOf(ref->result.loads_beyond);
-			ref->inside_handled = true;
+	std::string old_name = unwrapped(text, '{', '}');
+	std::string port;
+	for (SdcObjectRef *ref : refs) {
+		for (const auto &[old_port, pin] : ref->result.port_renames) {
+			if (old_port == old_name)
+				port = "{" + pin->port().name + "}";
 		}
 	}
+	return port;
 }
 
-// a generated clock behind a new inverter after Q goes on Q inverted, opensta shifts an -edge_shift inverse by a period
-void invertClock(std::vector<SdcWord> &words)
+Handles renamedCells(const SdcObjectRef &ref, const std::vector<std::string> &words_after_from)
 {
-	if (words[0].text != "create_generated_clock" || !anyBehindNewLogic(words.back()) || hasFlag(words, "-edge_shift"))
-		return;
-	std::string found, exact;
-	for (SdcObjectRef *ref : words.back().refs) {
-		found += refHandles(*ref, ThroughContext::OutsideThrough, PinChoice::FoundPins);
-		exact += refHandles(*ref, ThroughContext::OutsideThrough, PinChoice::ExactPins);
-	}
-	if (tclInt("::ysta::behind_inverter [list" + found + "] [list" + exact + "]") != 1)
-		return;
-	words.back().pin_choice = PinChoice::ExactPins;
-	bool edges = false;
-	size_t invert = 0;
-	for (size_t i = 1; i + 1 < words.size(); i++) {
-		if (words[i].text == "-invert")
-			invert = i;
-		if (words[i].text == "-edges") {
-			words[i + 1].text = rotateEdges(words[i + 1].text);
-			edges = true;
+	Handles cells;
+	for (const std::string &from_port : words_after_from) {
+		for (const auto &[old_port, pin] : ref.result.port_renames) {
+			if (old_port == from_port)
+				cells.push_back(staNetwork().handle(pin->inst));
 		}
 	}
-	if (invert != 0)
-		words.erase(words.begin() + invert);
-	else if (!edges)
-		words.insert(words.end() - 1, SdcWord{"-invert"});
+	return cells;
 }
 
-// the edges of the inverse clock, {a b c} as {b c c+b-a}
-std::string rotateEdges(const std::string &text)
+// a top level word, behind new logic or a renamed port
+std::string renderTopWord(const SdcWords &words, size_t at, RenderState &render)
 {
-	std::vector<std::string> parts = split_tokens(text.substr(1, text.size() - 2), " ");
-	if (parts.size() != 3)
-		return text;
-	int next = atoi(parts[2].c_str()) + atoi(parts[1].c_str()) - atoi(parts[0].c_str());
-	return "{" + parts[1] + " " + parts[2] + " " + std::to_string(next) + "}";
+	const SdcWord &word = words[at];
+	if (at + 1 < words.size() && anyBehindNewLogic(words[at + 1])) {
+		const SdcWord &getter = words[at + 1];
+		// -to behind new logic becomes -through the old signal -to the exact pins
+		// e.g. a mux before D
+		if (getter.use == Use::Endpoint)
+			return "-through " + renderGetter(getter, Use::Through, Pins::ByUse, render) + " " + word.text;
+		// -rise_from behind new logic takes the edge of the old signal
+		// e.g. an inverter before C
+		bool edge = word.text == "-rise_from" || word.text == "-fall_from";
+		if (getter.use == Use::Start && edge) {
+			std::string old_signal = renderGetter(getter, Use::Start, Pins::ByUse, render);
+			return "[::ysta::start_edge " + word.text + " " + old_signal + "]";
+		}
+	}
+	// the exact pins follow the old signal of the flag
+	// only a word after a from or to flag has these uses
+	if (anyBehindNewLogic(word) && word.use == Use::Start)
+		return renderGetter(word, Use::Start, Pins::Exact, render);
+	if (anyBehindNewLogic(word) && word.use == Use::Endpoint)
+		return renderGetter(word, Use::Through, Pins::Exact, render);
+	std::string port;
+	if (at > 0 && (words[at - 1].text == "-from" || words[at - 1].text == "-to"))
+		port = renamedPort(refsOf(words), word.text);
+	if (!port.empty())
+		return port;
+	return renderWord(word, render);
+}
+
+std::string disabledEdges(const SdcWord &word, RenderState &render)
+{
+	if (word.use != Use::Disable || word.refs.size() != 1)
+		return "";
+	SdcObjectRef &ref = *word.refs[0];
+	if (!ref.result.flattened_hier_pin && !ref.removedButLoadsKept())
+		return "";
+	render.on_stand_ins.insert(&ref);
+	return "[::ysta::wire_edges [list" + refHandles(ref, handlesOf(ref.result.loads_beyond)) + "]]";
 }
 
 bool anyBehindNewLogic(const SdcWord &word)
@@ -174,112 +123,117 @@ bool anyBehindNewLogic(const SdcWord &word)
 	return false;
 }
 
-bool hasFlag(const std::vector<SdcWord> &words, const std::string &flag)
-{
-	for (const SdcWord &word : words) {
-		if (word.text == flag)
-			return true;
-	}
-	return false;
-}
-
-void applyClockPins(const std::vector<SdcWord> &words)
-{
-	if (isClockCommand(words[0].text))
-		setClockPins(words, ClockUse::Clock);
-	else if (words[0].text == "set_clock_latency" && hasFlag(words, "-source"))
-		setClockPins(words, ClockUse::SourceLatency);
-	else if (words[0].text == "set_clock_latency")
-		setClockPins(words, ClockUse::NetworkLatency);
-}
-
-void setClockPins(const std::vector<SdcWord> &words, ClockUse use)
-{
-	for (size_t i = 0; i < words.size(); i++) {
-		ClockUse word_use = use;
-		if (use == ClockUse::Clock && i > 0 && words[i - 1].text == "-source")
-			word_use = ClockUse::GeneratedClockSource;
-		for (SdcObjectRef *ref : words[i].refs)
-			pickClockPins(*ref, word_use);
-		setClockPins(words[i].nested_words, use);
-	}
-}
-
-// where a clock use of a hierarchical pin goes when flatten removed the pin
-void pickClockPins(SdcObjectRef &ref, ClockUse use)
+Handles standIns(const SdcObjectRef &ref, Use use, const Handles &found)
 {
 	using PortDir = Netlist::PortDir;
-	bool output_side = ref.origin.hier_pin_dir == PortDir::Output || use == ClockUse::GeneratedClockSource;
-	if (use == ClockUse::Clock && ref.origin.hier_pin_dir == PortDir::Input)
-		ref.use_objects = loadsInside(ref);
-	else if (!ref.stillAsLeafPins())
-		return;
-	else if (use == ClockUse::NetworkLatency && !ref.result.loads_beyond.empty())
-		ref.use_objects = handlesOf(ref.result.loads_beyond);
-	else if (use != ClockUse::NetworkLatency && output_side && !ref.result.barrier_a_pins.empty())
-		ref.use_objects = handlesOf(ref.result.barrier_a_pins);
-	else if (use == ClockUse::SourceLatency && ref.origin.hier_pin_dir == PortDir::Input && !ref.result.barrier_y_pins.empty())
-		ref.use_objects = handlesOf(ref.result.barrier_y_pins);
-	else
-		return;
-	ref.inside_handled = true;
+	const TrackedRef::Result &result = ref.result;
+	bool output = ref.origin.hier_pin_dir == PortDir::Output;
+	if (use == Use::ReferencePin && !found.empty())
+		return {found.front()};
+	// also on a live hierarchical input, the cases below need a flattened pin
+	if (use == Use::ClockPin && ref.origin.hier_pin_dir == PortDir::Input)
+		return loadsInside(ref);
+	if (!ref.result.flattened_hier_pin)
+		return {};
+	switch (use) {
+	// -through or case value without loads beyond takes the found objects
+	// so the ref does not count as moved
+	case Use::Through:
+	case Use::CaseValue:
+		if (output && !result.loads_beyond.empty())
+			return handlesOf(result.loads_beyond);
+		return found;
+	case Use::ClockPin:
+	case Use::ClockSource: return handlesOf(result.barrier_a_pins);
+	case Use::SourceLatency: return handlesOf(output ? result.barrier_a_pins : result.barrier_y_pins);
+	case Use::NetworkLatency: return handlesOf(result.loads_beyond);
+	default: return {};
+	}
 }
 
-// the loads inside a hierarchical input pin, with the y pins of its barrier instance
-std::vector<ysta::Handle> loadsInside(const SdcObjectRef &ref)
+// the loads inside a hierarchical input pin, plus its barrier y pins
+Handles loadsInside(const SdcObjectRef &ref)
 {
-	std::vector<ysta::Handle> loads;
-	if (ref.stillAsLeafPins())
-		loads = handlesOf(ref.pins);
-	else
-		loadsBehindPins(ref.pins, loads);
+	Handles loads;
+	for (const Netlist::Pin *pin : ref.pins) {
+		if (ref.result.flattened_hier_pin) {
+			loads.push_back(staNetwork().handle(pin));
+		} else if (pin->inner != nullptr) {
+			// the leaf loads inside the hierarchical pin
+			Handles inner = handlesOf(staNetwork().view().leafPins(pin->inner, Netlist::WalkTarget::Loads));
+			loads.insert(loads.end(), inner.begin(), inner.end());
+		}
+	}
 	if (loads.empty())
 		return handlesOf(ref.pins);
-	std::vector<ysta::Handle> barrier_y_pins = handlesOf(ref.result.barrier_y_pins);
+	Handles barrier_y_pins = handlesOf(ref.result.barrier_y_pins);
 	loads.insert(loads.end(), barrier_y_pins.begin(), barrier_y_pins.end());
 	return loads;
 }
 
-// the leaf loads inside hierarchical pins
-void loadsBehindPins(const std::vector<const Netlist::Pin *> &pins, std::vector<ysta::Handle> &loads)
+// found clocks of a get_clocks or a list of them
+// write_sdc writes a name raw in braces, {a b} for clock a b
+std::string clockGetter(const SdcWord &word, RenderState &render)
 {
-	for (const Netlist::Pin *pin : pins) {
-		if (pin->inner == nullptr)
+	bool list = word.nested_words.size() > 1 && word.nested_words[0].text == "list";
+	std::vector<const SdcWord *> getters;
+	if (list) {
+		for (size_t i = 1; i < word.nested_words.size(); i++)
+			getters.push_back(&word.nested_words[i]);
+	} else {
+		getters.push_back(&word);
+	}
+	for (const SdcWord *getter : getters) {
+		if (getter->nested_words.size() != 2 || getter->nested_words[0].text != "get_clocks")
+			return "";
+	}
+	std::string clocks;
+	for (const SdcWord *getter : getters) {
+		std::string name = unwrapped(getter->nested_words[1].text, '{', '}');
+		if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) == nullptr)
+			appendSpaced(render.result.missing, name);
+		else
+			appendSpaced(clocks, clockByName(name));
+	}
+	// OpenSTA drops a missing clock, no clock left loses the command
+	render.result.empty_getter |= clocks.empty();
+	if (list || clocks.empty())
+		return "[list " + clocks + "]";
+	return clocks;
+}
+
+// get_clocks reads * ? and backslash as pattern chars
+// find_clock takes the exact name
+std::string clockByName(const std::string &name)
+{
+	if (name.find_first_of("*?\\") != std::string::npos)
+		return "[::sta::find_clock " + tclQuoted(name) + "]";
+	return "[get_clocks " + tclQuoted(tclQuoted(name)) + "]";
+}
+
+// get_ports takes * and ? as wildcards, find_port the exact name
+std::string portByName(const std::string &name)
+{
+	if (name.find_first_of("*?") != std::string::npos)
+		return "[[[::sta::top_instance] cell] find_port " + tclQuoted(name) + "]";
+	return "[get_ports " + tclQuoted(name) + "]";
+}
+
+void noteBarrierPinNames(const SdcObjectRef &ref, const Handles &objects)
+{
+	for (ysta::Handle handle : objects) {
+		if (handle.kind() != ysta::Handle::Kind::Pin)
 			continue;
-		std::vector<Netlist::Pin *> leaves = the_sta->view.leafPins(pin->inner, Netlist::WalkTarget::Loads);
-		std::vector<ysta::Handle> inner = handlesOf(leaves);
-		loads.insert(loads.end(), inner.begin(), inner.end());
+		if (staNetwork().recordOf<Netlist::Pin>(handle)->inst->kind == Netlist::Instance::Kind::Barrier)
+			the_sta->user_names[handle] = ref.name;
 	}
 }
 
-void singleReferencePin(const std::vector<SdcWord> &words)
+void appendSpaced(std::string &text, const std::string &word)
 {
-	for (size_t i = 0; i + 1 < words.size(); i++) {
-		if (words[i].text != "-reference_pin")
-			continue;
-		for (SdcObjectRef *ref : words[i + 1].refs) {
-			std::vector<ysta::Handle> pins = objectsToRender(*ref, ThroughContext::OutsideThrough, words[i + 1].pin_choice);
-			if (pins.size() > 1)
-				ref->use_objects = {pins.front()};
-			ref->inside_handled = true;
-		}
-	}
-}
-
-// write_sdc writes a clock name raw in braces, {a b} for the clock a b
-void quoteClocks(std::vector<SdcWord> &words)
-{
-	for (SdcWord &word : words) {
-		std::vector<SdcWord> &inner = word.nested_words;
-		quoteClocks(inner);
-		if (inner.size() != 2 || inner[0].text != "get_clocks")
-			continue;
-		std::string name = inner[1].text;
-		if (name.size() > 2 && name.front() == '{' && name.back() == '}')
-			name = name.substr(1, name.size() - 2);
-		if (the_sta->cmdMode()->sdc()->findClock(name.c_str()) != nullptr)
-			inner[1].text = tclQuoted(tclQuoted(name));
-	}
+	if (!text.empty())
+		text += ' ';
+	text += word;
 }
 
 } // namespace opensta_net

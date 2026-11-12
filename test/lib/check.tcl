@@ -1,10 +1,10 @@
-# helpers for the tests in test/, each test sources this file first.
-# a failed check ends the test with an error, test/run.sh prints it.
+# test helpers, each test in test/ sources this file first
 
 set nangate deps/OpenSTA/test/nangate45/Nangate45_typ.lib
 set sky130 deps/OpenSTA/test/sky130hd/sky130hd_tt.lib
 
 # fail when got is not want, name the first line that differs
+# the error ends the test, test/run.sh prints it
 proc check_eq {got want} {
 	if {$got eq $want} return
 	set gots [split $got \n]
@@ -23,7 +23,7 @@ proc error_of {script} {
 	return $msg
 }
 
-# the number of lines of the text that match the pattern, only * is a wildcard
+# count the lines matching the pattern, only * is a wildcard
 proc count_lines {text pattern} {
 	set pattern [string map {[ \\[ ] \\] ? \\? \\ \\\\} $pattern]
 	set count 0
@@ -54,7 +54,37 @@ proc link_top {verilog {top top} {lib test/data/simple.lib}} {
 	yosys opensta_net -liberty $lib -link
 }
 
-# the yosys log of one yosys command. On a command error, the error message is that log
+# moved_pins.v as gates with _reg flop names, linked on nangate
+proc link_moved_pins {} {
+	yosys read_verilog test/data/moved_pins.v
+	yosys hierarchy -top top
+	yosys proc
+	yosys opt_dff
+	yosys techmap
+	yosys rename -wire -suffix _reg {t:$_DFF*}
+	yosys opensta_net -liberty test/data/moved_pins.lib
+	yosys opensta_net -liberty $::nangate -link
+}
+
+# track.v mapped to nangate in a new design, linked
+proc link_track {} {
+	yosys design -reset
+	yosys read_verilog test/data/track.v
+	yosys hierarchy -top top
+	yosys proc
+	yosys opt
+	yosys techmap
+	yosys opt
+	yosys dfflibmap -liberty $::nangate
+	yosys abc -liberty $::nangate
+	yosys opensta_net -liberty $::nangate -link
+}
+
+# the sorted full names of the objects
+proc names {objs} { lsort [lmap obj $objs {get_full_name $obj}] }
+
+# the yosys log of one yosys command
+# on a command error, the error message is that log
 proc log_of {args} {
 	set path [temp_file {}]
 	set failed [catch {yosys tee -o $path {*}$args}]
@@ -63,8 +93,9 @@ proc log_of {args} {
 	return -code $failed $log
 }
 
-# the yosys log of a tcl script, with the syncs of its STA queries and of -autosync.
-# the yosys tcl command that runs it ends the epoch first, as each pass does
+# the yosys log of a tcl script
+# it holds the syncs of its STA queries and of -autosync
+# yosys tcl ends the epoch first, as each pass does
 proc log_of_tcl {script} {
 	set path [temp_file [list uplevel #0 $script]]
 	set failed [catch {log_of tcl $path} log]
@@ -97,7 +128,7 @@ proc sta_out {script} {
 	return $out
 }
 
-# the output of the sta binary, with OpenSTA's own verilog reader, on a script
+# sta binary output on a script, with OpenSTA's verilog reader
 proc reference {script} {
 	set path [temp_file $script]
 	set failed [catch {exec -keepnewline $::env(STA) -no_init -no_splash -exit $path 2>@1} out]

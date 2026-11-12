@@ -1,6 +1,4 @@
-// sdc text to commands of words and back:
-// - parse   write_sdc writes objects as tokens, each token of a getter becomes a ref
-// - render  the words as a script on the objects that resolve found
+// SDC text to commands of words and back
 #include "opensta_net.h"
 
 #include <charconv>
@@ -9,12 +7,7 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
-bool SdcObjectRef::stillAsLeafPins() const
-{
-	return result.flattened_hier_pin && !inside_handled;
-}
-
-std::vector<ysta::Handle> SdcObjectRef::objects() const
+Handles SdcObjectRef::objects() const
 {
 	switch (kind) {
 	case Kind::Instance: return handlesOf(instances);
@@ -37,7 +30,7 @@ void SdcObjectRef::addObject(ysta::Handle handle)
 
 ysta::YosysNetwork &staNetwork()
 {
-	return *the_sta->yosys_network;
+	return static_cast<ysta::YosysNetwork &>(*the_sta->network());
 }
 
 std::vector<std::string> sdcCommands(const std::string &text)
@@ -54,7 +47,7 @@ std::vector<std::string> sdcCommands(const std::string &text)
 			commands.push_back(cmd);
 		cmd.clear();
 	}
-	// incomplete: its evaluation reports the error
+	// an incomplete command stays, its evaluation reports the error
 	if (!normalizeCommand(cmd).empty())
 		commands.push_back(cmd);
 	return commands;
@@ -98,18 +91,16 @@ bool isClockCommand(const std::string &name)
 	return name == "create_clock" || name == "create_generated_clock";
 }
 
-bool isThroughFlag(const std::string &word)
-{
-	return word == "-through" || word == "-rise_through" || word == "-fall_through";
-}
-
 // get_timing_edges -from X -to Y
-bool isEdgePair(const std::vector<SdcWord> &words)
+bool isEdgePair(const SdcWords &words)
 {
-	return words.size() == 5 && words[0].text == "get_timing_edges" && words[1].text == "-from" && words[3].text == "-to";
+	if (words.size() != 5)
+		return false;
+	bool from_to = words[1].text == "-from" && words[3].text == "-to";
+	return words[0].text == "get_timing_edges" && from_to;
 }
 
-bool isGetterList(const std::vector<SdcWord> &words)
+bool isGetterList(const SdcWords &words)
 {
 	for (size_t i = 1; i < words.size(); i++) {
 		if (words[i].kind != WordKind::Getter)
@@ -118,7 +109,7 @@ bool isGetterList(const std::vector<SdcWord> &words)
 	return words.size() > 1 && words[0].text == "list";
 }
 
-bool parseWords(const std::string &script, std::vector<SdcWord> &words)
+bool SdcReader::parseWords(const std::string &script, SdcWords &words)
 {
 	Tcl_Parse parse;
 	if (Tcl_ParseCommand(nullptr, script.data(), script.size(), 0, &parse) != TCL_OK)
@@ -139,7 +130,7 @@ bool parseWords(const std::string &script, std::vector<SdcWord> &words)
 	return true;
 }
 
-void parseSubstitution(const std::string &inner, SdcWord &word)
+void SdcReader::parseSubstitution(const std::string &inner, SdcWord &word)
 {
 	std::string name = commandName(inner);
 	// splitnets -ports renames ports, so they are refs too
@@ -152,9 +143,12 @@ void parseSubstitution(const std::string &inner, SdcWord &word)
 		return;
 	if (parseWords(inner, word.nested_words))
 		word.kind = WordKind::Substitution;
-	if (isEdgePair(word.nested_words))
-		markRefs(word.nested_words, RefMark::IsolateCell);
-	// R4: a list of getters is one getter, so the rewrites see its refs
+	// the arc ends of get_timing_edges keep their cell
+	if (isEdgePair(word.nested_words)) {
+		for (SdcObjectRef *ref : refsOf(word.nested_words))
+			ref->hints.keep_cell = true;
+	}
+	// a list of getters is one getter, so the rewrites see its refs
 	if (isGetterList(word.nested_words)) {
 		word.refs = refsOf(word.nested_words);
 		word.nested_words.clear();
@@ -162,13 +156,14 @@ void parseSubstitution(const std::string &inner, SdcWord &word)
 	}
 }
 
-void addGetterRefs(const std::string &inner, SdcWord &word)
+// a new ref has one object
+// the parse sets its hints later, the kernel resolve sets its result
+void SdcReader::addGetterRefs(const std::string &inner, SdcWord &word)
 {
-	EpochConstraints &constraints = the_sta->constraints;
 	for (auto [kind, handle] : tokensIn(inner)) {
 		if (handle.bits == 0)
 			continue;
-		SdcObjectRef &ref = constraints.refs.emplace_back(SdcObjectRef{{kind}, objectName(&staNetwork(), handle)});
+		SdcObjectRef &ref = constraints.refs.emplace_back(SdcObjectRef{{kind}, userName(handle)});
 		ref.addObject(handle);
 		word.refs.push_back(&ref);
 		constraints.view_refs.push_back(&ref);
@@ -177,25 +172,33 @@ void addGetterRefs(const std::string &inner, SdcWord &word)
 		word.kind = WordKind::Getter;
 }
 
-void parseCommands(const SdcTextByMode &modes)
+void parseCommands(const SdcTextByMode &modes, const std::vector<ysta::Token> &tokens, EpochConstraints &into)
 {
+	SdcReader reader{tokens, into};
 	for (const auto &[mode, sdc] : modes) {
 		for (const std::string &text : sdcCommands(sdc)) {
-			if (commandName(text) == "current_design")
+			std::string name = commandName(text);
+			if (name == "current_design")
 				continue;
-			SdcCommand &command = the_sta->constraints.commands.emplace_back();
+			SdcCommand &command = into.commands.emplace_back();
+			SdcWords &words = command.words;
 			command.mode = mode;
-			command.text = text;
-			parseWords(text, command.words);
-			joinName(command.words);
-			if (isClockCommand(commandName(text)))
-				markRefs(command.words, RefMark::KeepAsInstance);
-			tokensIn(text, &command.log_text);
+			reader.parseWords(text, words);
+			joinName(words);
+			bool latency_source = std::ranges::find(words, "-source", &SdcWord::text) != words.end();
+			assignUses(words, name, latency_source);
+			// the barrier of a clock command pin becomes a Barrier instance
+			if (isClockCommand(name)) {
+				for (SdcObjectRef *ref : refsOf(words))
+					ref->hints.keep_as_instance = true;
+			}
+			reader.tokensIn(text, &command.log_text);
 		}
 	}
 }
 
-// adds the texts of the kept list or the journal (::ysta::texts), returns the count of commands with no text
+// adds the texts of the kept list or the journal, see ::ysta::texts
+// returns the count of commands with no text
 int appendTraceTexts(SdcTextByMode &modes, const char *list)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
@@ -216,8 +219,9 @@ int appendTraceTexts(SdcTextByMode &modes, const char *list)
 	return untexted;
 }
 
-// write_sdc writes a -name raw up to the next option, a journal or kept text braces it
-void joinName(std::vector<SdcWord> &words)
+// write_sdc writes a -name raw up to the next option
+// a journal or kept text braces it
+void joinName(SdcWords &words)
 {
 	size_t at = 0;
 	while (at < words.size() && words[at].text != "-name")
@@ -235,21 +239,67 @@ void joinName(std::vector<SdcWord> &words)
 	words.erase(words.begin() + at + 2, words.begin() + end);
 }
 
-void markRefs(const std::vector<SdcWord> &words, RefMark mark)
+// sets each word's use from the command and the flag before it
+// recurses into nested words of a clock command or set_clock_latency
+// all nested words of a -through get Through
+void assignUses(SdcWords &words, const std::string &command, bool latency_source)
 {
-	for (SdcObjectRef *ref : refsOf(words)) {
-		if (mark == RefMark::IsolateCell)
-			ref->hints.keep_cell = true;
-		else
-			ref->hints.keep_as_instance = true;
+	std::string flag;
+	for (SdcWord &word : words) {
+		word.use = useOf(command, flag, latency_source);
+		if (isClockCommand(command) || command == "set_clock_latency")
+			assignUses(word.nested_words, command, latency_source);
+		if (word.use == Use::Through)
+			assignUse(word.nested_words, Use::Through);
+		flag = word.text;
 	}
+}
+
+void assignUse(SdcWords &words, Use use)
+{
+	for (SdcWord &word : words) {
+		word.use = use;
+		assignUse(word.nested_words, use);
+	}
+}
+
+Use useOf(const std::string &command, const std::string &flag, bool latency_source)
+{
+	static const pool<std::string> path_commands = {
+		"set_false_path", "set_multicycle_path", "set_max_delay",
+		"set_min_delay", "set_data_check", "group_path"
+	};
+	bool from_flag = flag == "-from" || flag == "-rise_from" || flag == "-fall_from";
+	bool to_flag = flag == "-to" || flag == "-rise_to" || flag == "-fall_to";
+	bool through_flag = flag == "-through" || flag == "-rise_through" || flag == "-fall_through";
+	if (isClockCommand(command))
+		return flag == "-source" ? Use::ClockSource : Use::ClockPin;
+	if (command == "set_clock_latency")
+		return latency_source ? Use::SourceLatency : Use::NetworkLatency;
+	if (through_flag)
+		return Use::Through;
+	if (command == "set_case_analysis")
+		return Use::CaseValue;
+	if (command == "set_disable_timing")
+		return Use::Disable;
+	if (flag == "-reference_pin")
+		return Use::ReferencePin;
+	if (path_commands.count(command) && to_flag && command != "set_data_check")
+		return Use::Endpoint;
+	if (path_commands.count(command) && (from_flag || to_flag))
+		return Use::Start;
+	return Use::Objects;
 }
 
 // larger is tighter, the value is the last word, only -comment after it
 bool tightness(const SdcCommand &command, double &tight)
 {
-	static const dict<std::string, double> signs = {{"set_min_delay", 1}, {"set_max_delay", -1}, {"set_multicycle_path", -1}};
-	const std::vector<SdcWord> &words = command.words;
+	static const dict<std::string, double> signs = {
+		{"set_min_delay", 1},
+		{"set_max_delay", -1},
+		{"set_multicycle_path", -1}
+	};
+	const SdcWords &words = command.words;
 	if (words.empty() || !signs.count(words[0].text))
 		return false;
 	size_t end = words.size();
@@ -264,7 +314,8 @@ bool tightness(const SdcCommand &command, double &tight)
 	return true;
 }
 
-// opensta takes the later of two exceptions on a path that flatten made them share
+// flatten can make two exceptions share a path
+// OpenSTA takes the later one there
 void orderOverrides(std::vector<SdcCommand> &commands)
 {
 	std::vector<std::tuple<int, double, size_t>> order;
@@ -287,10 +338,9 @@ void orderOverrides(std::vector<SdcCommand> &commands)
 		commands[places[i]] = std::move(sorted[i]);
 }
 
-std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
+std::vector<ysta::Token> SdcReader::tokensIn(const std::string &text, std::string *names) const
 {
 	std::vector<ysta::Token> found;
-	const std::vector<ysta::Token> &tokens = the_sta->tokens;
 	size_t at = 0;
 	size_t next;
 	while ((next = text.find(ysta::detail::token_prefix, at)) != std::string::npos) {
@@ -306,7 +356,7 @@ std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
 			continue;
 		*names += text.substr(from, next - from);
 		if (known)
-			*names += objectName(&staNetwork(), tokens[index].handle);
+			*names += userName(tokens[index].handle);
 		else
 			*names += text.substr(next, at - next);
 	}
@@ -315,7 +365,7 @@ std::vector<ysta::Token> tokensIn(const std::string &text, std::string *names)
 	return found;
 }
 
-bool namesObject(const std::string &text)
+bool SdcReader::namesObject(const std::string &text) const
 {
 	for (const auto &[kind, handle] : tokensIn(text)) {
 		if (kind != SdcObjectRef::Kind::TopPort)
@@ -333,7 +383,17 @@ std::string objectName(const sta::Network *network, ysta::Handle handle)
 	}
 }
 
-std::vector<SdcObjectRef *> refsOf(const std::vector<SdcWord> &words)
+// a Barrier instance pin gets the name of its sync ref
+// a loss then names the user's object
+std::string userName(ysta::Handle handle)
+{
+	auto found = the_sta->user_names.find(handle);
+	if (found != the_sta->user_names.end())
+		return found->second;
+	return objectName(&staNetwork(), handle);
+}
+
+std::vector<SdcObjectRef *> refsOf(const SdcWords &words)
 {
 	std::vector<SdcObjectRef *> refs;
 	for (const SdcWord &word : words) {
@@ -369,71 +429,88 @@ std::string swigHandle(ysta::Handle handle)
 	return name;
 }
 
-// a -through net that flatten grew takes its pins in the old scope
-bool rendersThroughPins(const SdcObjectRef &ref, ThroughContext context)
+Handles objectsFor(const SdcObjectRef &ref, Use use, Pins pins, const Handles &stand_ins, const Handles &found)
 {
-	return context == ThroughContext::AfterThrough && !ref.result.old_scope_pins.empty();
-}
-
-// the exact pins beat the objects of a use, which beat the found objects
-std::vector<ysta::Handle> objectsToRender(const SdcObjectRef &ref, ThroughContext context, PinChoice choice)
-{
-	if (rendersThroughPins(ref, context))
+	bool exact = pins == Pins::Exact;
+	bool through = use == Use::Through && !exact;
+	if (through && !ref.result.old_scope_pins.empty())
 		return handlesOf(ref.result.old_scope_pins);
-	if (choice == PinChoice::ExactPins && !ref.result.own_pins.empty())
+	if (exact && !ref.result.own_pins.empty())
 		return handlesOf(ref.result.own_pins);
-	if (!ref.use_objects.empty())
-		return ref.use_objects;
-	return ref.objects();
+	if (!stand_ins.empty())
+		return stand_ins;
+	return found;
 }
 
-std::string refHandles(SdcObjectRef &ref, ThroughContext context, PinChoice choice)
+std::string refHandles(const SdcObjectRef &ref, const Handles &objects)
 {
-	if (context == ThroughContext::OutsideThrough)
-		ref.used_outside_through = true;
-	bool ports = ref.kind == SdcObjectRef::Kind::TopPort && !rendersThroughPins(ref, context);
 	std::string handles;
-	for (ysta::Handle handle : objectsToRender(ref, context, choice)) {
-		if (ports)
-			handles += " [get_ports " + tclQuoted(objectName(&staNetwork(), handle)) + "]";
+	for (ysta::Handle handle : objects) {
+		if (ref.kind == SdcObjectRef::Kind::TopPort)
+			handles += " " + portByName(objectName(&staNetwork(), handle));
 		else
 			handles += " " + swigHandle(handle);
 	}
 	return handles;
 }
 
-std::string renderWords(const std::vector<SdcWord> &words, int &empty_getters, ThroughContext context)
+std::string renderWord(const SdcWord &word, RenderState &render)
+{
+	std::string edges = disabledEdges(word, render);
+	if (!edges.empty())
+		return edges;
+	if (word.kind == WordKind::Getter)
+		return renderGetter(word, word.use, Pins::ByUse, render);
+	std::string clock = clockGetter(word, render);
+	if (!clock.empty())
+		return clock;
+	if (isEdgePair(word.nested_words)) {
+		SdcWords pair = {word.nested_words[2], word.nested_words[4]};
+		return "[::ysta::edges " + renderWords(pair, render) + "]";
+	}
+	if (word.kind == WordKind::Substitution)
+		return "[" + renderWords(word.nested_words, render) + "]";
+	return word.text;
+}
+
+std::string renderWords(const SdcWords &words, RenderState &render)
 {
 	std::string text;
-	bool after_through_flag = false;
-	for (const SdcWord &word : words) {
-		if (!text.empty())
-			text += ' ';
-		ThroughContext word_context = context;
-		if (after_through_flag)
-			word_context = ThroughContext::AfterThrough;
-		if (word.kind == WordKind::Getter) {
-			text += renderGetter(word, empty_getters, word_context);
-		} else if (word.kind == WordKind::Substitution && isEdgePair(word.nested_words)) {
-			std::vector<SdcWord> pair = {word.nested_words[2], word.nested_words[4]};
-			text += "[::ysta::edges " + renderWords(pair, empty_getters, word_context) + "]";
-		} else if (word.kind == WordKind::Substitution) {
-			text += "[" + renderWords(word.nested_words, empty_getters, word_context) + "]";
-		} else {
-			text += word.text;
-		}
-		after_through_flag = isThroughFlag(word.text);
-	}
+	for (const SdcWord &word : words)
+		appendSpaced(text, renderWord(word, render));
 	return text;
 }
 
-std::string renderGetter(const SdcWord &word, int &empty_getters, ThroughContext context)
+std::string renderGetter(const SdcWord &word, Use use, Pins pins, RenderState &render)
 {
 	std::string handles;
-	for (SdcObjectRef *ref : word.refs)
-		handles += refHandles(*ref, context, word.pin_choice);
-	empty_getters += handles.empty() && !onlyBarrierInstancePins(word);
+	bool only_barrier_instance_pins = true;
+	for (SdcObjectRef *ref : word.refs) {
+		Handles found = ref->objects();
+		Handles stand_ins = standIns(*ref, use, found);
+		if (stand_ins.empty())
+			stand_ins = renamedCells(*ref, render.words_after_from);
+		if (!stand_ins.empty())
+			render.on_stand_ins.insert(ref);
+		render.result.refs_rendered = true;
+		render.result.found |= !found.empty();
+		if (found.empty() && !ref->origin.on_barrier_instance && render.missing_refs.insert(ref).second)
+			appendSpaced(render.result.missing, ref->name);
+		Handles objects = objectsFor(*ref, use, pins, stand_ins, found);
+		noteBarrierPinNames(*ref, objects);
+		handles += refHandles(*ref, objects);
+		only_barrier_instance_pins &= ref->origin.on_barrier_instance;
+	}
+	render.result.empty_getter |= handles.empty() && !only_barrier_instance_pins;
 	return "[list" + handles + "]";
+}
+
+// {a b} -> a b, "a b" -> a b, anything else unchanged
+std::string unwrapped(const std::string &text, char open, char close)
+{
+	if (text.size() >= 2 && text.front() == open && text.back() == close)
+		return text.substr(1, text.size() - 2);
+	return text;
 }
 
 } // namespace opensta_net

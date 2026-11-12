@@ -1,9 +1,4 @@
-// before each pass or rtlil edit the epoch ends:
-// 1. write_sdc writes the constraints, objects as tokens
-// 2. each token becomes a ref, which anchors its rtlil objects
-// 3. passes carry the anchors
-// 4. the first query after a change opens the epoch: rebuild, then resolveAndApply
-// the trace keeps what write_sdc does not write and the commands since the epoch end (::ysta::record in trace.tcl)
+// epoch end, sync and link of the STA network, see opensta_net.h
 #include "opensta_net.h"
 
 #include <fstream>
@@ -32,61 +27,75 @@ bool writeModeSdc(const std::string &mode, std::string &text)
 	return ok;
 }
 
+// a failed write leaves no text of any mode
 bool writeAllModes(SdcTextByMode &result)
 {
 	for (const sta::Mode *mode : the_sta->modes()) {
-		if (!writeModeSdc(mode->name(), result[mode->name()]))
+		if (!writeModeSdc(mode->name(), result[mode->name()])) {
+			result.clear();
 			return false;
+		}
 	}
 	return true;
 }
 
-// writes, parses and anchors the constraints, a failed write_sdc keeps the last constraints and the journal
-bool captureEpochConstraints()
+// returns false when we lost commands since the last capture
+// write_sdc ok -> constraints are its text plus the kept list
+// write_sdc failed -> the journal joins the old constraints
+bool Epochs::capture()
 {
 	SdcTextByMode modes;
-	the_sta->tokens.clear();
-	the_sta->yosys_network->setTokenSink(&the_sta->tokens);
+	std::vector<ysta::Token> tokens;
+	// the only token mode, for write_sdc and the trace texts
+	// the parse below names objects by name
+	staNetwork().setTokenSink(&tokens);
 	bool written = writeAllModes(modes);
 	const char *list = "journal";
 	if (written)
 		list = "kept";
 	int untexted = appendTraceTexts(modes, list);
-	the_sta->yosys_network->setTokenSink(nullptr);
+	staNetwork().setTokenSink(nullptr);
 	if (written)
 		the_sta->constraints = {};
 	bool journaled = written || untexted == 0;
 	tclEval("::ysta::clear_journal");
-	parseCommands(modes);
+	parseCommands(modes, tokens, the_sta->constraints);
+	// tightest path exception last, it wins on a shared path
+	// flatten can make two exceptions share a path
 	orderOverrides(the_sta->constraints.commands);
-	the_sta->tracker.checkpoint(the_sta->view, the_sta->constraints.view_refs, the_sta->track_mode);
+	the_sta->tracker.checkpoint(staNetwork().view(), the_sta->constraints.view_refs, the_sta->track_barriers);
 	return journaled;
 }
 
-void closeEpoch()
+void Epochs::end()
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
-	if (the_sta->running || !network->linked() || network->epoch_closed)
+	if (phase_ != Phase::Open)
 		return;
-	if (!the_sta->view.upToDate())
+	// a stale view cannot anchor its objects in the changed design
+	// the journal waits for the next capture or sync
+	if (!staNetwork().view().upToDate())
 		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
-	else if (!captureEpochConstraints())
-		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: they are lost.\n");
-	network->epoch_closed = true;
+	else if (!capture())
+		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: "
+		            "they are lost.\n");
+	phase_ = Phase::Ended;
 }
 
-void openEpoch()
+bool Epochs::syncForQuery(Design *design)
 {
-	bool closed = the_sta->yosys_network->epoch_closed || the_sta->rebuild_pending;
-	if (closed && yosys_get_design() != nullptr)
-		syncView(yosys_get_design());
+	if (phase_ == Phase::Building)
+		return staNetwork().linked();
+	if ((phase_ == Phase::Ended || phase_ == Phase::BuildFailed) && design != nullptr)
+		sync(design);
+	return phase_ == Phase::Open;
 }
 
-bool needsSync()
+bool Epochs::stale() const
 {
-	return the_sta->rebuild_pending || (the_sta->yosys_network->linked() && !the_sta->view.upToDate());
+	return phase_ != Phase::Stopped && (!staNetwork().linked() || !staNetwork().view().upToDate());
 }
 
+// warns when the reason changes
 bool canBuild(Design *design)
 {
 	std::string reason;
@@ -102,53 +111,52 @@ bool canBuild(Design *design)
 	return false;
 }
 
-void syncView(Design *design)
+void Epochs::sync(Design *design)
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
-	if (the_sta->running || (!network->linked() && !the_sta->rebuild_pending))
+	if (phase_ == Phase::Stopped || phase_ == Phase::Building)
 		return;
-	if (!needsSync()) {
-		network->epoch_closed = false;
+	if (!stale()) {
+		phase_ = Phase::Open;
 		return;
 	}
 	// queries see no network until a sync succeeds
 	if (!canBuild(design)) {
-		network->epoch_closed = true;
+		if (phase_ == Phase::Open)
+			phase_ = Phase::Ended;
 		return;
 	}
-	SyncRunning running(the_sta->running);
-	network->epoch_closed = false;
-	rebuildAndReapply(design);
+	phase_ = Phase::Building;
+	try {
+		phase_ = rebuild(design);
+	} catch (...) {
+		phase_ = Phase::Stopped;
+		dropView();
+		throw;
+	}
 }
 
-SyncRunning::SyncRunning(bool &flag) : running(flag)
-{
-	running = true;
-}
-
-SyncRunning::~SyncRunning()
-{
-	running = false;
-}
-
-void rebuildAndReapply(Design *design)
+Epochs::Phase Epochs::rebuild(Design *design)
 {
 	warnDroppedParasitics();
-	// the commands since the epoch end read no network object, else a sync ran before them
+	// read before the link, getters sync first so the journal ran none
+	// it names clocks, library objects and held handles by plain name
+	// it parses with no tokens
 	SdcTextByMode journal;
 	int untexted = appendTraceTexts(journal, "journal");
 	std::string error;
 	if (!linkView(design, error)) {
-		the_sta->rebuild_pending = true;
-		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync succeeds.\n", error.c_str());
-		return;
+		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync "
+		            "succeeds.\n", error.c_str());
+		return Phase::BuildFailed;
 	}
-	the_sta->rebuild_pending = false;
 	// the apply keeps the unwritten commands again
 	tclEval("::ysta::clear");
-	parseCommands(journal);
+	// the journal joins the captured constraints
+	// resolveAndApply finds their objects by the anchors and runs them
+	parseCommands(journal, {}, the_sta->constraints);
 	int lost = untexted + resolveAndApply();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
+	return Phase::Open;
 }
 
 void warnDroppedParasitics()
@@ -164,71 +172,79 @@ void warnDroppedParasitics()
 	}
 }
 
-void warnSharedNames()
-{
-	size_t shared = the_sta->yosys_network->takeSharedNames();
-	if (shared > 0)
-		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that name "
-		            "finds the other net.\n", shared);
-}
-
-// before the pins of this view go, in the mode of each disable
-void undoHierPinDisables()
-{
-	sta::Scene *cmd_scene = the_sta->cmdScene();
-	std::string cmd_mode = the_sta->cmdMode()->name();
-	if (tclInt("::ysta::undo_hier_disables") != 1)
-		return;
-	the_sta->setCmdScene(cmd_scene);
-	the_sta->setCmdMode(cmd_mode);
-}
-
 void dropView()
 {
-	ysta::YosysNetwork *network = the_sta->yosys_network;
+	ysta::YosysNetwork *network = &staNetwork();
 	if (network->linked()) {
-		undoHierPinDisables();
+		// before the pins of this view go, in the mode of each disable
+		tclEval("::ysta::undo_hier_disables");
 		the_sta->networkChanged();
 		network->unlink();
 	}
-	the_sta->view.clear();
+	the_sta->user_names.clear();
 }
 
+// a log_cmd_error in the build throws in a yosys command, else yosys exits
 bool linkView(Design *design, std::string &error)
 {
 	dropView();
 	auto t0 = std::chrono::steady_clock::now();
-	ysta::YosysNetwork *network = the_sta->yosys_network;
-	NetView *view = &the_sta->view;
-	network->attach(view);
+	ysta::YosysNetwork *network = &staNetwork();
+	size_t shared_names = 0;
 	try {
 		pool<const Cell *> barriers = the_sta->tracker.barrierInstances(design);
-		view->build(design, {network, &barriers});
-		network->link();
+		NetView::BuildOptions options = {network, &barriers};
+		shared_names = network->link(std::make_unique<NetView>(design, options));
 	} catch (const sta::Exception &exception) {
 		network->unlink();
-		view->clear();
 		error = exception.what();
 		return false;
 	}
-	warnSharedNames();
+	if (shared_names > 0)
+		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that "
+		            "name finds the other net.\n", shared_names);
 	long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-	auto [insts, nets, pins] = view->counts();
+	auto [insts, nets, pins] = network->view().counts();
 	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
 	return true;
 }
 
-void linkDesign(Design *design)
+// a failed build is a command error and ends in Stopped
+// it never ends in BuildFailed, so no query retries it
+void Epochs::link(Design *design)
 {
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
 	the_sta->constraints = {};
+	the_sta->last_unbuildable_reason.clear();
 	the_sta->tracker.clear(design);
 	tclEval("::ysta::clear");
-	the_sta->yosys_network->epoch_closed = false;
-	if (!linkView(design, reason))
-		log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
+	phase_ = Phase::Building;
+	try {
+		if (!linkView(design, reason))
+			log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
+	} catch (...) {
+		phase_ = Phase::Stopped;
+		dropView();
+		throw;
+	}
+	phase_ = Phase::Open;
+}
+
+// capture without barriers -> remove barriers -> sync by anchors only
+// BuildFailed and Stopped skip the capture, Stopped also skips the sync
+void Epochs::unprotect(Design *design)
+{
+	the_sta->track_barriers = false;
+	// Ended opens again for the capture
+	if (phase_ == Phase::Ended)
+		phase_ = Phase::Open;
+	end();
+	// runs optbarriers as a pass
+	// its beforePass calls end(), a no-op on the ended epoch
+	the_sta->tracker.unprotect(design);
+	sync(design);
 }
 
 } // namespace opensta_net

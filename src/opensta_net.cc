@@ -30,8 +30,6 @@ void NonConsoleTee::operator()(LogSink &sink) const
 size_t YosysStaReport::printString(const char *buffer, size_t length)
 {
 	std::string_view text(buffer, length);
-	if (text.starts_with("Warning"))
-		warnings++;
 	LogMessage msg(LogSeverity::Info, {}, "", "%s", text);
 	msg.cached_msg = std::string(text);
 	logger().for_each_sink(NonConsoleTee{msg});
@@ -45,56 +43,9 @@ void YosysSta::makeReport()
 
 void YosysSta::makeNetwork()
 {
-	yosys_network = new ysta::YosysNetwork;
-	yosys_network->setOpenEpochHook(openEpoch);
-	network_ = yosys_network;
-}
-
-sta::Instance *YosysSta::makeInstance(const char *, sta::LibertyCell *, sta::Instance *)
-{
-	yosys_network->refuseEdit("make_instance");
-	return nullptr;
-}
-
-void YosysSta::deleteInstance(sta::Instance *)
-{
-	yosys_network->refuseEdit("delete_instance");
-}
-
-void YosysSta::replaceCell(sta::Instance *, sta::Cell *, sta::LibertyCell *)
-{
-	yosys_network->refuseEdit("replace_cell");
-}
-
-sta::Net *YosysSta::makeNet(const char *, sta::Instance *)
-{
-	yosys_network->refuseEdit("make_net");
-	return nullptr;
-}
-
-void YosysSta::deleteNet(sta::Net *)
-{
-	yosys_network->refuseEdit("delete_net");
-}
-
-void YosysSta::connectPin(sta::Instance *, sta::Port *, sta::Net *)
-{
-	yosys_network->refuseEdit("connect_pin");
-}
-
-void YosysSta::connectPin(sta::Instance *, sta::LibertyPort *, sta::Net *)
-{
-	yosys_network->refuseEdit("connect_pin");
-}
-
-void YosysSta::disconnectPin(sta::Pin *)
-{
-	yosys_network->refuseEdit("disconnect_pin");
-}
-
-void YosysSta::makePortPin(const char *, sta::PortDirection *)
-{
-	yosys_network->refuseEdit("make_port_pin");
+	ysta::YosysNetwork *network = new ysta::YosysNetwork;
+	network->setOpenEpochHook(queryHook);
+	network_ = network;
 }
 
 bool tclEval(const std::string &script)
@@ -102,22 +53,27 @@ bool tclEval(const std::string &script)
 	return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK;
 }
 
+bool queryHook()
+{
+	return the_sta->epochs.syncForQuery(yosys_get_design());
+}
+
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
-	closeEpoch();
+	the_sta->epochs.end();
 	return TCL_OK;
 }
 
 void beforePass(Pass *pass, Design *)
 {
 	if (pass->pass_name != "opensta_net")
-		closeEpoch();
+		the_sta->epochs.end();
 }
 
 int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
 {
 	if (the_sta->autosync && yosys_get_design() != nullptr)
-		syncView(yosys_get_design());
+		the_sta->epochs.sync(yosys_get_design());
 	return TCL_OK;
 }
 
@@ -127,14 +83,8 @@ int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[
 	int on = 0;
 	if (objc != 2 || Tcl_GetBooleanFromObj(interp, objv[1], &on) != TCL_OK)
 		return TCL_ERROR;
-	the_sta->yosys_network->setStaleNames(on);
+	staNetwork().setStaleNames(on);
 	return TCL_OK;
-}
-
-bool tclFailure(const std::string &what, std::string &error)
-{
-	error = what + ": " + Tcl_GetStringResult(yosys_get_tcl_interp());
-	return false;
 }
 
 bool evalStaInit(Tcl_Interp *interp)
@@ -145,7 +95,7 @@ bool evalStaInit(Tcl_Interp *interp)
 	return ok;
 }
 
-bool makeSta(std::string &error)
+void makeSta()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	sta::initSta();
@@ -155,15 +105,14 @@ bool makeSta(std::string &error)
 	the_sta->setTclInterp(interp);
 	the_sta->setThreadCount(1);
 	if (Sta_Init(interp) != TCL_OK)
-		return tclFailure("Sta_Init failed", error);
+		log_error("OpenSTA: Sta_Init failed: %s\n", Tcl_GetStringResult(interp));
 	if (!evalStaInit(interp))
-		return tclFailure("the init scripts failed", error);
+		log_error("OpenSTA: the init scripts failed: %s\n", Tcl_GetStringResult(interp));
 	if (!tclEval("init_sta_cmds"))
-		return tclFailure("init_sta_cmds failed", error);
-	return true;
+		log_error("OpenSTA: init_sta_cmds failed: %s\n", Tcl_GetStringResult(interp));
 }
 
-bool bootTcl(std::string &error)
+void bootTcl()
 {
 	static const char *script =
 #include "trace.inc"
@@ -172,30 +121,35 @@ bool bootTcl(std::string &error)
 	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::after_yosys", tclAfterYosys, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::stale_names", tclStaleNames, nullptr, nullptr);
-	if (tclEval(script))
-		return true;
-	error = Tcl_GetStringResult(interp);
-	return false;
+	if (!tclEval(script))
+		log_error("OpenSTA: %s\n", Tcl_GetStringResult(interp));
 }
 
 void bootSta()
 {
 	if (the_sta != nullptr)
 		return;
-	std::string error;
-	if (!makeSta(error) || !bootTcl(error))
-		log_error("OpenSTA: %s\n", error.c_str());
+	makeSta();
+	bootTcl();
 	Pass::pre_call_hooks.push_back(beforePass);
 	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
 }
 
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 {
-	const std::map<std::string, std::string *> values = {{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
-	                                                     {"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}};
-	const std::map<std::string, bool *> flags = {{"-link", &opt.link}, {"-sync", &opt.sync},
-	                                             {"-autosync", &opt.autosync}, {"-protect", &opt.protect},
-	                                             {"-unprotect", &opt.unprotect}};
+	const std::map<std::string, std::string *> values = {
+		{"-eval", &opt.eval_cmd},
+		{"-liberty", &opt.liberty_file},
+	  {"-source", &opt.source_file},
+		{"-sdc", &opt.sdc_file}
+	};
+	const std::map<std::string, bool *> flags = {
+		{"-link", &opt.link},
+		{"-sync", &opt.sync},
+		{"-autosync", &opt.autosync},
+		{"-protect", &opt.protect},
+		{"-unprotect", &opt.unprotect}
+	};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
 		const std::string &arg = args[argidx];
@@ -208,21 +162,22 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 		else
 			break;
 	}
-	opt.eval_cmd = unquote(opt.eval_cmd);
+	// a .ys line keeps the quotes of -eval "a b", drop one pair
+	opt.eval_cmd = unwrapped(opt.eval_cmd, '"', '"');
 	return argidx;
 }
 
 void linkOrSync(Design *design, const PassOptions &opt)
 {
 	if (opt.link) {
-		linkDesign(design);
+		the_sta->epochs.link(design);
 		return;
 	}
-	// Passes may have run since the last call
-	if (!opt.sync && needsSync())
+	// passes may have run since the last call
+	if (!opt.sync && the_sta->epochs.stale())
 		log_warning("opensta_net: design changed since link, rebuilding the STA network "
 		            "and re-applying the constraints.\n");
-	syncView(design);
+	the_sta->epochs.sync(design);
 }
 
 void readLiberty(const std::string &file)
@@ -247,14 +202,6 @@ void checkSourced(bool ok, const std::string &file)
 		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
-// A .ys line keeps the quotes of -eval "a b": drop one pair
-std::string unquote(const std::string &arg)
-{
-	if (arg.size() >= 2 && arg.front() == '"' && arg.back() == '"')
-		return arg.substr(1, arg.size() - 2);
-	return arg;
-}
-
 void evalTcl(const std::string &cmd)
 {
 	bool ok = tclEval(cmd);
@@ -263,19 +210,6 @@ void evalTcl(const std::string &cmd)
 		log_cmd_error("OpenSTA tcl error: %s\n", result);
 	if (result[0] != 0)
 		log("%s\n", result);
-}
-
-// the sync after -unprotect applies the constraints by the anchors only
-void setProtection(Design *design, const PassOptions &opt)
-{
-	if (opt.protect)
-		the_sta->track_mode = TrackMode::Barriers;
-	if (!opt.unprotect)
-		return;
-	the_sta->track_mode = TrackMode::AnchorsOnly;
-	the_sta->yosys_network->epoch_closed = false;
-	the_sta->tracker.unprotect(design);
-	syncView(design);
 }
 
 OpenstaNetPass::OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}
@@ -340,11 +274,17 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	linkOrSync(design, opt);
 	if (!opt.sdc_file.empty())
 		checkSourced(tclEval("read_sdc {" + opt.sdc_file + "}"), opt.sdc_file);
-	if (!opt.source_file.empty())
-		checkSourced(tclEval("namespace eval ::sta {include_file {" + opt.source_file + "} 0 0}"), opt.source_file);
+	if (!opt.source_file.empty()) {
+		std::string include_script = "namespace eval ::sta {include_file {" + opt.source_file + "} 0 0}";
+		checkSourced(tclEval(include_script), opt.source_file);
+	}
 	if (!opt.eval_cmd.empty())
 		evalTcl(opt.eval_cmd);
-	setProtection(design, opt);
+	// the sync after -unprotect applies the constraints by the anchors only
+	if (opt.protect)
+		the_sta->track_barriers = true;
+	if (opt.unprotect)
+		the_sta->epochs.unprotect(design);
 }
 
 OpenstaNetPass opensta_net_pass;

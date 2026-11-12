@@ -2,7 +2,6 @@
 source test/lib/check.tcl
 link_top test/data/flat.v
 yosys opensta_net -sdc test/data/flat.sdc
-proc names {objs} { lsort [lmap obj $objs {get_full_name $obj}] }
 proc objects {} {
 	return [join [list \
 		[format %.2f [worst_slack -max]] \

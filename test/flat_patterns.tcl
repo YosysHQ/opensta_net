@@ -2,7 +2,6 @@
 source test/lib/check.tcl
 link_top test/data/flat.v
 yosys flatten
-proc names {objs} { lsort [lmap obj $objs {get_full_name $obj}] }
 check_eq [names [get_cells u1.*]] {u1/i0 u1/r u1/u2/j u1/u2/k}
 check_eq [names [get_pins u1.u2.*/Y]] {u1/u2/j/Y u1/u2/k/Y}
 yosys design -reset

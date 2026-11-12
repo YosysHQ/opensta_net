@@ -18,16 +18,7 @@ yosys autoname
 yosys opensta_net -unprotect
 yosys opt_clean -purge
 yosys select -assert-none w:*netview_anchor*
-yosys design -reset
-yosys read_verilog test/data/track.v
-yosys hierarchy -top top
-yosys proc
-yosys opt
-yosys techmap
-yosys opt
-yosys dfflibmap -liberty $nangate
-yosys abc -liberty $nangate
-yosys opensta_net -liberty $nangate -link
+link_track
 yosys opensta_net -protect
 yosys opensta_net -sdc test/data/track.sdc
 yosys opt_clean

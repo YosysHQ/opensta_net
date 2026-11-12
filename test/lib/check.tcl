@@ -54,6 +54,35 @@ proc link_top {verilog {top top} {lib test/data/simple.lib}} {
 	yosys opensta_net -liberty $lib -link
 }
 
+# moved_pins.v as gates with _reg flop names, linked on nangate
+proc link_moved_pins {} {
+	yosys read_verilog test/data/moved_pins.v
+	yosys hierarchy -top top
+	yosys proc
+	yosys opt_dff
+	yosys techmap
+	yosys rename -wire -suffix _reg {t:$_DFF*}
+	yosys opensta_net -liberty test/data/moved_pins.lib
+	yosys opensta_net -liberty $::nangate -link
+}
+
+# track.v mapped to nangate in a new design, linked
+proc link_track {} {
+	yosys design -reset
+	yosys read_verilog test/data/track.v
+	yosys hierarchy -top top
+	yosys proc
+	yosys opt
+	yosys techmap
+	yosys opt
+	yosys dfflibmap -liberty $::nangate
+	yosys abc -liberty $::nangate
+	yosys opensta_net -liberty $::nangate -link
+}
+
+# the sorted full names of the objects
+proc names {objs} { lsort [lmap obj $objs {get_full_name $obj}] }
+
 # the yosys log of one yosys command
 # on a command error, the error message is that log
 proc log_of {args} {

@@ -1,16 +1,7 @@
 # track.sdc on a mapped design survives autoname, flatten and -unprotect
 source test/lib/check.tcl
 proc track {passes} {
-	yosys design -reset
-	yosys read_verilog test/data/track.v
-	yosys hierarchy -top top
-	yosys proc
-	yosys opt
-	yosys techmap
-	yosys opt
-	yosys dfflibmap -liberty $::nangate
-	yosys abc -liberty $::nangate
-	yosys opensta_net -liberty $::nangate -link
+	link_track
 	yosys opensta_net -sdc test/data/track.sdc
 	set log {}
 	foreach pass $passes { append log [log_of {*}$pass] }

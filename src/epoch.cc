@@ -1,98 +1,54 @@
 // epoch end, sync and link of the STA network, see opensta_net.h
 #include "opensta_net.h"
 
-#include <fstream>
-
-#include "sta/MinMax.hh"
 #include "sta/Mode.hh"
 #include "sta/Parasitics.hh"
-#include "sta/Scene.hh"
+#include "sta/Search.hh"
 
 USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
-bool writeModeSdc(const std::string &mode, std::string &text)
+void Epochs::capture()
 {
-	std::string file = make_temp_file(get_base_tmpdir() + "/opensta_net_XXXXXX.sdc");
-	bool ok = tclEval("write_sdc -no_timestamp -mode {" + mode + "} {" + file + "}");
-	if (ok) {
-		std::stringstream stream;
-		stream << std::ifstream(file).rdbuf();
-		text = stream.str();
-	} else {
+	std::map<ysta::Handle, size_t> tokens;
+	std::string capture_modes = "::ysta::capture";
+	for (const sta::Mode *mode : the_sta->modes())
+		capture_modes += " " + tclQuoted(mode->name());
+	// the only token mode
+	staNetwork().setTokens(&tokens);
+	bool written = tclEval(capture_modes);
+	staNetwork().setTokens(nullptr);
+	if (!written) {
 		log_warning("opensta_net: write_sdc failed: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
+		return;
 	}
-	remove(file.c_str());
-	return ok;
-}
-
-// a failed write leaves no text of any mode
-bool writeAllModes(SdcTextByMode &result)
-{
-	for (const sta::Mode *mode : the_sta->modes()) {
-		if (!writeModeSdc(mode->name(), result[mode->name()])) {
-			result.clear();
-			return false;
-		}
-	}
-	return true;
-}
-
-// returns false when we lost commands since the last capture
-// write_sdc ok -> constraints are its text plus the kept list
-// write_sdc failed -> the journal joins the old constraints
-bool Epochs::capture()
-{
-	SdcTextByMode modes;
-	std::vector<ysta::Token> tokens;
-	// the only token mode, for write_sdc and the trace texts
-	// the parse below names objects by name
-	staNetwork().setTokenSink(&tokens);
-	bool written = writeAllModes(modes);
-	const char *list = "journal";
-	if (written)
-		list = "kept";
-	int untexted = appendTraceTexts(modes, list);
-	staNetwork().setTokenSink(nullptr);
-	if (written)
-		the_sta->constraints = {};
-	bool journaled = written || untexted == 0;
-	tclEval("::ysta::clear_journal");
-	parseCommands(modes, tokens, the_sta->constraints);
-	// tightest path exception last, it wins on a shared path
-	// flatten can make two exceptions share a path
-	orderOverrides(the_sta->constraints.commands);
-	the_sta->tracker.checkpoint(staNetwork().view(), the_sta->constraints.view_refs, the_sta->track_barriers);
-	return journaled;
+	makeRefs(tokens);
+	the_sta->tracker.checkpoint(staNetwork().view(), trackedRefs(), the_sta->track_barriers);
 }
 
 void Epochs::end()
 {
 	if (phase_ != Phase::Open)
 		return;
-	// a stale view cannot anchor its objects in the changed design
-	// the journal waits for the next capture or sync
-	if (!staNetwork().view().upToDate())
-		log_debug("opensta_net: the view is stale, the anchors of the last epoch end stay.\n");
-	else if (!capture())
-		log_warning("opensta_net: write_sdc failed and the journal lacks commands since the last epoch end: "
-		            "they are lost.\n");
+	// a stale view cannot anchor its objects in the changed design, the sync then runs the journal again by name
+	if (staNetwork().view().upToDate())
+		capture();
 	phase_ = Phase::Ended;
+}
+
+bool Epochs::stale() const
+{
+	return phase_ != Phase::Stopped && (!staNetwork().linked() || !staNetwork().view().upToDate());
 }
 
 bool Epochs::syncForQuery(Design *design)
 {
 	if (phase_ == Phase::Building)
 		return staNetwork().linked();
-	if ((phase_ == Phase::Ended || phase_ == Phase::BuildFailed) && design != nullptr)
+	if (phase_ == Phase::Ended && design != nullptr)
 		sync(design);
 	return phase_ == Phase::Open;
-}
-
-bool Epochs::stale() const
-{
-	return phase_ != Phase::Stopped && (!staNetwork().linked() || !staNetwork().view().upToDate());
 }
 
 // warns when the reason changes
@@ -121,8 +77,7 @@ void Epochs::sync(Design *design)
 	}
 	// queries see no network until a sync succeeds
 	if (!canBuild(design)) {
-		if (phase_ == Phase::Open)
-			phase_ = Phase::Ended;
+		phase_ = Phase::Ended;
 		return;
 	}
 	phase_ = Phase::Building;
@@ -138,23 +93,16 @@ void Epochs::sync(Design *design)
 Epochs::Phase Epochs::rebuild(Design *design)
 {
 	warnDroppedParasitics();
-	// read before the link, getters sync first so the journal ran none
-	// it names clocks, library objects and held handles by plain name
-	// it parses with no tokens
-	SdcTextByMode journal;
-	int untexted = appendTraceTexts(journal, "journal");
+	// before the link, the old pins still live
+	tclEval("::ysta::name_journal");
+	tclEval("::ysta::undo_hier_disables");
 	std::string error;
 	if (!linkView(design, error)) {
 		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync "
 		            "succeeds.\n", error.c_str());
-		return Phase::BuildFailed;
+		return Phase::Ended;
 	}
-	// the apply keeps the unwritten commands again
-	tclEval("::ysta::clear");
-	// the journal joins the captured constraints
-	// resolveAndApply finds their objects by the anchors and runs them
-	parseCommands(journal, {}, the_sta->constraints);
-	int lost = untexted + resolveAndApply();
+	int lost = resolveAndApply();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
 	return Phase::Open;
 }
@@ -174,49 +122,44 @@ void warnDroppedParasitics()
 
 void dropView()
 {
-	ysta::YosysNetwork *network = &staNetwork();
-	if (network->linked()) {
-		// before the pins of this view go, in the mode of each disable
-		tclEval("::ysta::undo_hier_disables");
+	if (staNetwork().linked()) {
+		// Sta::clear leaves the generated clock data of the old graph
+		the_sta->search()->arrivalsInvalid();
 		the_sta->networkChanged();
-		network->unlink();
+		staNetwork().unlink();
 	}
-	the_sta->user_names.clear();
 }
 
 // a log_cmd_error in the build throws in a yosys command, else yosys exits
 bool linkView(Design *design, std::string &error)
 {
 	dropView();
-	auto t0 = std::chrono::steady_clock::now();
 	ysta::YosysNetwork *network = &staNetwork();
 	size_t shared_names = 0;
 	try {
-		pool<const Cell *> barriers = the_sta->tracker.barrierInstances(design);
-		NetView::BuildOptions options = {network, &barriers};
-		shared_names = network->link(std::make_unique<NetView>(design, options));
+		shared_names = network->link(std::make_unique<NetView>(design, network));
 	} catch (const sta::Exception &exception) {
 		network->unlink();
 		error = exception.what();
 		return false;
 	}
 	if (shared_names > 0)
-		log_warning("opensta_net: %zu net(s) have the name of another net in their scope. A getter by that "
-		            "name finds the other net.\n", shared_names);
-	long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-	auto [insts, nets, pins] = network->view().counts();
-	log("opensta_net: built network: %zu instances, %zu nets, %zu pins (%ld ms).\n", insts, nets, pins, ms);
+		log_warning("opensta_net: %zu wire(s) have the name of a constant net (one_ or zero_). A getter by that "
+		            "name finds the constant net.\n", shared_names);
+	const NetView &view = network->view();
+	log("opensta_net: built network: %zu instances, %zu nets, %zu pins.\n", view.instances().size() - 1,
+	    view.nets().size(), view.pins().size());
 	return true;
 }
 
-// a failed build is a command error and ends in Stopped
-// it never ends in BuildFailed, so no query retries it
+// a failed build is a command error, it ends in Stopped, so no query retries it
 void Epochs::link(Design *design)
 {
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
-	the_sta->constraints = {};
+	the_sta->refs.clear();
+	the_sta->track_barriers = true;
 	the_sta->last_unbuildable_reason.clear();
 	the_sta->tracker.clear(design);
 	tclEval("::ysta::clear");
@@ -232,17 +175,14 @@ void Epochs::link(Design *design)
 	phase_ = Phase::Open;
 }
 
-// capture without barriers -> remove barriers -> sync by anchors only
-// BuildFailed and Stopped skip the capture, Stopped also skips the sync
+// sync through the barriers -> capture puts only ids -> remove barriers -> sync by the ids of cells and wires
+// only an Open epoch has the capture, Stopped also skips the syncs
 void Epochs::unprotect(Design *design)
 {
+	sync(design);
 	the_sta->track_barriers = false;
-	// Ended opens again for the capture
-	if (phase_ == Phase::Ended)
-		phase_ = Phase::Open;
 	end();
-	// runs optbarriers as a pass
-	// its beforePass calls end(), a no-op on the ended epoch
+	// optbarriers runs as a pass, its beforePass calls end(), a no-op on the ended epoch
 	the_sta->tracker.unprotect(design);
 	sync(design);
 }

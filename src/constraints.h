@@ -60,67 +60,71 @@ using PinSet = std::set<const sta::Pin *>;
 using SeenStarts = std::set<std::pair<const sta::Pin *, Polarity>>;
 // the lists of ysta::moved_ends in the order of its result
 struct MovedEnds {
-	Tcl_Obj *kept = nullptr;                    // the objects that stayed, a Tcl list
-	Handles moved;                              // the pins behind new logic
-	Handles ends;                               // the path ends after the moved pins
-	Handles starts;                             // the starts that the moved pins clock
-	Handles inverted_starts;                    // the starts behind inverting logic
+	Tcl_Obj *kept = nullptr; // the objects that stayed, a Tcl list
+	Handles moved;           // the pins behind new logic
+	Handles ends;            // the path ends after the moved pins
+	Handles starts;          // the starts that the moved pins clock
+	Handles inverted_starts; // the starts behind inverting logic
+};
+// the cut pins at the ends of an arc of a cell that is gone, and its cut so far
+struct ArcCut {
+	Handles from_pins, inputs; // of -from and of each input
+	Handles to_pins, outputs;  // of -to and of each output, the -to of a check arc is an input
+	ReachMask check_reach;     // with no -to the checks from the port are arcs of the command
+	Tcl_Obj *edges;            // the edges to disable
+	PinSet seen = {};          // the pins that cutArcPaths was at
+	bool exact = true;         // no path of the arc is left that only an edge of other paths cuts
 };
 
-bool hasNoWireDriver(ysta::Handle load); // no wire edge goes into the load
-Tcl_Obj *handleList(const Handles &handles, Tcl_Obj *list = Tcl_NewListObj(0, nullptr)); // appends their SWIG names
-int vacuous(Tcl_Interp *interp); // the Tcl error of a command with no path in the new logic
+// ysta::resolve word ?wire_as?, the objects of a word of tokens, an error when it finds none
+int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 // after the result is set, TCL_OK with objects or an empty word of the user
 // else notes the loss as vacuous or as an empty word and gives its Tcl error
 int foundOrLost(Tcl_Interp *interp, Tcl_Obj *objects, bool empty_is_vacuous);
 // true with the Tcl error of usage when a command has not min_args to max_args words after its name
 bool wrongArgCount(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[], int min_args, int max_args, const char *usage);
-// ysta::resolve word ?wire_as?, the objects of a word of tokens, an error when it finds none
-int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 // appends what a ref gives, see WireAs, and notes a ref with no object as missing
 void appendFound(const SdcObjectRef &ref, WireAs wire_as, Tcl_Obj *objects);
-// ysta::moved_ends option word, the lists of MovedEnds for ::ysta::moved_end_words, vacuous when only moved has objects
-int tclMovedEnds(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
-void addMovedEnds(const SdcObjectRef &ref, PathSide side, MovedEnds &found, SeenStarts &seen);
-// ysta::moved_arc cell_word options, the words of an arc disable on the new network
-// a found cell has the port names that a pass gave them, ports not on one cell give the pins of goneArcPins
-int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
-// appends each option with its port now, from and to get the old ports, false when a port is not on the one cell
-bool arcWords(const SdcObjectRef &ref, const std::vector<std::string> &options, std::string &from, std::string &to,
-              Tcl_Obj *words);
+bool hasNoWireDriver(ysta::Handle load); // no wire edge goes into the load
+Tcl_Obj *handleList(const Handles &handles, Tcl_Obj *list = Tcl_NewListObj(0, nullptr)); // appends their SWIG names
+int vacuous(Tcl_Interp *interp); // the Tcl error of a command with no path in the new logic
 // the name of the port now, "" when the pins of the port are not on the one cell
 std::string arcPort(const SdcObjectRef &ref, const std::string &port);
-// the pins of the new logic that have just the paths of the arc, none when it has no path of the arc
-//   the load pins of -from that reach -to, when none of them reaches another end
-//   else the driver pins of -to that -from reaches, when no other port reaches them
-//   else the load pins, both sides share arcs with other ports, so this also cuts the paths from -from to the
-//   other outputs, a known limit, disable the edges on the paths when a cell needs it
-Handles goneArcPins(const SdcObjectRef &ref, const std::string &from, const std::string &to);
-// the cut pins of port on a path of the arc to far_port, a forward walk starts at the inputs
-// the bool is false when one of them is also on another path
-std::pair<Handles, bool> arcSide(const SdcObjectRef &ref, Direction direction, ReachMask check_reach,
-                                 const std::string &port, const std::string &far_port);
 // the pins at the cut side of the inputs or outputs, of one port or of each port when port is ""
 Handles cutPins(const SdcObjectRef &ref, PortSide side, const std::string &port);
 std::vector<sta::Edge *> edgesAt(const sta::Pin *pin, Direction direction); // out of its driver or into its load vertex
 void appendEdges(Tcl_Obj *list, const sta::Pin *from, const sta::Pin *to); // the timing edges between two pins
 void appendWireEdges(Tcl_Obj *list, const sta::Pin *pin); // cut the paths that end at the pin, a pin disable does not
-// the edges that stand for an arc of a cell that is gone, see goneArcPins and appendCheckEdges
-void appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to);
 // a check arc is the check edges from what -from reaches to what -to reaches
-// a known limit, a check that another port also reaches is disabled for it too
-void appendCheckEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to);
+// false when another port also reaches the clock or the checked pin of one
+bool appendCheckEdges(ArcCut &arc);
+// the edges that stand for an arc of a cell that is gone, they have just the paths of the arc
+// false when a path of the arc has no such edge, the command is then lost
+bool appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to);
+// no path into the pin comes from the ends that are no targets
+bool reachesOnly(const sta::Pin *pin, const Handles &targets, const Handles &ends);
+// cuts the paths of the arc through the pin, by its wire edges when it has just such paths, else after it
+void cutArcPaths(ArcCut &arc, const sta::Pin *pin);
 // what the pin reaches in the new logic, a target or another of the ends, a timing check counts as check_reach
 ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_reach, const Handles &targets,
                     const Handles &ends, PinSet &seen);
+// ysta::moved_arc cell_word options, the words of an arc disable on the new network
+// a found cell has the port names that a pass gave them, ports not on one cell give the edges of appendArcEdges
+int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+// appends each option with its port now, from and to get the old ports, false when a port is not on the one cell
+bool arcWords(const SdcObjectRef &ref, const std::vector<std::string> &options, std::string &from, std::string &to,
+              Tcl_Obj *words);
 bool isPathEnd(const sta::Pin *pin, PathSide side);
 void addPathEnds(const sta::Pin *pin, Handles &ends); // the path ends in the fanout of the pin
 // adds the first starts after the pin, those that an inverting arc clocks to inverted_starts
 void addStartsBehind(const sta::Pin *pin, Polarity polarity, MovedEnds &found, SeenStarts &seen);
-// ysta::loss failed error script, logs a lost or changed command, 1 when it is one
-int tclLoss(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+// ysta::moved_ends option word, the lists of MovedEnds for ::ysta::moved_end_words, vacuous when only moved has objects
+int tclMovedEnds(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+void addMovedEnds(const SdcObjectRef &ref, PathSide side, MovedEnds &found, SeenStarts &seen);
 // ysta::missing name, the command of the sync goes on without it
 int tclMissing(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
+// ysta::loss failed error script, logs a lost or changed command, 1 when it is one
+int tclLoss(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
 std::string lossReason(const CommandLoss &loss, bool failed, const std::string &error); // "" when none
 int resolveAndApply(); // how many commands are lost or changed, clocks and library objects apply by name
 

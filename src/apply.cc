@@ -155,15 +155,14 @@ void appendWireEdges(Tcl_Obj *list, const sta::Pin *pin)
 	}
 }
 
-void appendCheckEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to)
+bool appendCheckEdges(ArcCut &arc)
 {
 	// the reach ends at the outputs of the old cell
-	Handles outputs = cutPins(ref, PortSide::Outputs, "");
 	PinSet from_reach, to_reach;
-	for (ysta::Handle pin : cutPins(ref, PortSide::Inputs, from))
-		reachMask(pin, Direction::Forward, ReachNothing, {}, outputs, from_reach);
-	for (ysta::Handle pin : cutPins(ref, PortSide::Inputs, to))
-		reachMask(pin, Direction::Forward, ReachNothing, {}, outputs, to_reach);
+	for (ysta::Handle pin : arc.from_pins)
+		reachMask(pin, Direction::Forward, ReachNothing, {}, arc.outputs, from_reach);
+	for (ysta::Handle pin : arc.to_pins)
+		reachMask(pin, Direction::Forward, ReachNothing, {}, arc.outputs, to_reach);
 	sta::Graph *graph = the_sta->ensureGraph();
 	std::set<std::pair<const sta::Pin *, const sta::Pin *>> checks;
 	for (const sta::Pin *pin : from_reach) {
@@ -173,21 +172,60 @@ void appendCheckEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string 
 				checks.insert({pin, checked});
 		}
 	}
-	for (const auto &[clock_pin, checked] : checks)
-		appendEdges(list, clock_pin, checked);
+	bool exact = true;
+	for (const auto &[clock_pin, checked] : checks) {
+		exact = exact && reachesOnly(clock_pin, arc.from_pins, arc.inputs);
+		exact = exact && reachesOnly(checked, arc.to_pins, arc.inputs);
+		appendEdges(arc.edges, clock_pin, checked);
+	}
+	return exact;
 }
 
-void appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to)
+bool appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to)
 {
-	bool is_check = false;
-	for (const auto &[port, is_output, pins] : ref.port_cuts)
-		is_check = is_check || (!is_output && port == to);
-	if (is_check) {
-		appendCheckEdges(list, ref, from, to);
+	PortSide to_side = PortSide::Outputs;
+	for (const auto &[port, is_output, pins] : ref.port_cuts) {
+		if (!is_output && port == to)
+			to_side = PortSide::Inputs; // a check arc
+	}
+	ArcCut arc = {.from_pins = cutPins(ref, PortSide::Inputs, from), .inputs = cutPins(ref, PortSide::Inputs, ""),
+	              .to_pins = cutPins(ref, to_side, to), .outputs = cutPins(ref, PortSide::Outputs, ""),
+	              .check_reach = to.empty() ? ReachTarget : ReachOtherEnd, .edges = list};
+	if (to_side == PortSide::Inputs)
+		return appendCheckEdges(arc);
+	for (ysta::Handle pin : arc.from_pins)
+		cutArcPaths(arc, pin);
+	return arc.exact;
+}
+
+bool reachesOnly(const sta::Pin *pin, const Handles &targets, const Handles &ends)
+{
+	PinSet seen;
+	return reachMask(pin, Direction::Backward, ReachNothing, targets, ends, seen) == ReachTarget;
+}
+
+void cutArcPaths(ArcCut &arc, const sta::Pin *pin)
+{
+	if (!arc.exact || !arc.seen.insert(pin).second)
+		return;
+	PinSet seen;
+	ReachMask after = reachMask(pin, Direction::Forward, arc.check_reach, arc.to_pins, arc.outputs, seen);
+	if ((after & ReachTarget) == 0)
+		return;
+	if (after == ReachTarget && reachesOnly(pin, arc.from_pins, arc.inputs)) {
+		appendWireEdges(arc.edges, pin);
 		return;
 	}
-	for (ysta::Handle pin : goneArcPins(ref, from, to))
-		appendWireEdges(list, pin);
+	// the paths of the arc end at a pin of -to or at a check with other paths, no pin there has just them
+	std::vector<sta::Edge *> edges = edgesAt(pin, Direction::Forward);
+	bool has_check = std::ranges::any_of(edges, &sta::TimingRole::isTimingCheck, &sta::Edge::role);
+	bool at_to_pin = std::ranges::count(arc.to_pins, ysta::Handle(pin)) != 0;
+	bool is_end = at_to_pin || (has_check && arc.check_reach == ReachTarget);
+	arc.exact = !is_end;
+	for (sta::Edge *edge : edges) {
+		if (!is_end && !edge->role()->isTimingCheck())
+			cutArcPaths(arc, edge->to(the_sta->graph())->pin());
+	}
 }
 
 ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_reach, const Handles &targets,
@@ -217,37 +255,6 @@ ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_re
 	return mask;
 }
 
-Handles goneArcPins(const SdcObjectRef &ref, const std::string &from, const std::string &to)
-{
-	// with no -to the checks from the port are arcs of the command
-	ReachMask check_reach = to.empty() ? ReachTarget : ReachOtherEnd;
-	auto [arc_loads, loads_exact] = arcSide(ref, Direction::Forward, check_reach, from, to);
-	if (loads_exact)
-		return arc_loads;
-	auto [arc_drivers, drivers_exact] = arcSide(ref, Direction::Backward, ReachNothing, to, from);
-	return drivers_exact ? arc_drivers : arc_loads;
-}
-
-std::pair<Handles, bool> arcSide(const SdcObjectRef &ref, Direction direction, ReachMask check_reach,
-                                 const std::string &port, const std::string &far_port)
-{
-	PortSide near_side = PortSide::Inputs, far_side = PortSide::Outputs;
-	if (direction == Direction::Backward)
-		std::swap(near_side, far_side);
-	Handles targets = cutPins(ref, far_side, far_port);
-	Handles far_pins = cutPins(ref, far_side, "");
-	Handles arc_pins;
-	bool exact = true;
-	for (ysta::Handle pin : cutPins(ref, near_side, port)) {
-		PinSet seen;
-		ReachMask mask = reachMask(pin, direction, check_reach, targets, far_pins, seen);
-		exact = exact && mask != ReachBoth;
-		if ((mask & ReachTarget) != 0)
-			arc_pins.push_back(pin);
-	}
-	return {arc_pins, exact};
-}
-
 int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 2, 2, "cell_word options"))
@@ -260,20 +267,23 @@ int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 	std::string from, to;
 	Tcl_Obj *words = Tcl_NewListObj(0, nullptr);
 	bool ports_on_cell = arcWords(*ref, tclWords(objv[2]), from, to, words);
-	bool on_cell = !ref->instances.empty() && ports_on_cell;
 	Tcl_Obj *objects = Tcl_NewListObj(0, nullptr);
 	bool is_deleted = ref->gone && ref->instances.empty() && ref->loads.empty();
+	bool has_exact_cut = true;
 	if (is_deleted) {
 		the_sta->loss.missing += " " + ref->name;
-	} else if (on_cell) {
+	} else if (!ref->instances.empty() && ports_on_cell) {
 		handleList(staNetwork().handles(ref->instances), objects);
 	} else {
 		Tcl_SetListObj(words, 0, nullptr);
-		appendArcEdges(objects, *ref, from, to);
+		has_exact_cut = appendArcEdges(objects, *ref, from, to);
 	}
 	Tcl_ListObjAppendElement(interp, words, objects);
 	Tcl_SetObjResult(interp, words);
-	return foundOrLost(interp, objects, !is_deleted);
+	if (has_exact_cut)
+		return foundOrLost(interp, objects, !is_deleted);
+	Tcl_SetObjResult(interp, Tcl_NewStringObj("the new logic has the paths of the arc only with other paths", -1));
+	return TCL_ERROR;
 }
 
 bool arcWords(const SdcObjectRef &ref, const std::vector<std::string> &options, std::string &from, std::string &to,

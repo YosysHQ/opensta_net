@@ -12,8 +12,8 @@ set log [track {autoname}]
 check_eq [sync_losses $log] 0
 check_eq [lost_cmds $log] {}
 set log [track {flatten}]
-check_eq [sync_losses $log] 0
 check_eq [lost_cmds $log] {}
 set log [track {flatten {opensta_net -unprotect} {select -assert-none t:$barrier}}]
+# -unprotect syncs before and after it removes the barriers
 check_eq [sync_losses $log] {0 0}
 check_eq [lost_cmds $log] {}

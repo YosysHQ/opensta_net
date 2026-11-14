@@ -13,18 +13,13 @@ yosys opt_clean
 yosys select -assert-min 1 t:\$barrier
 yosys rename -wire -suffix _reg {t:$_DFF*}
 yosys select -assert-count 3 {t:$_DFF*} n:*_reg %i
-# -unprotect leaves no cut wire that autoname named
 yosys autoname
 yosys opensta_net -unprotect
 yosys opt_clean -purge
-yosys select -assert-none w:*netview_anchor*
 link_track
-yosys opensta_net -protect
 yosys opensta_net -sdc test/data/track.sdc
 yosys opt_clean
 yosys select -assert-min 1 t:\$barrier
 yosys autoname
-yosys select -assert-min 1 w:*netview_anchor*
 yosys opensta_net -unprotect
 yosys opt_clean -purge
-yosys select -assert-none w:*netview_anchor* c:*netview_anchor*

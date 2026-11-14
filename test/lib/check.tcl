@@ -94,7 +94,7 @@ proc log_of {args} {
 }
 
 # the yosys log of a tcl script
-# it holds the syncs of its STA queries and of -autosync
+# it holds the syncs of its STA queries
 # yosys tcl ends the epoch first, as each pass does
 proc log_of_tcl {script} {
 	set path [temp_file [list uplevel #0 $script]]
@@ -110,6 +110,16 @@ proc sync_losses {log} {
 		lappend losses $lost
 	}
 	return $losses
+}
+
+# the lost counts of the sync after a yosys command with a capture that fails
+proc fail_capture {args} {
+	rename write_sdc ysta_test_write_sdc
+	proc ::write_sdc {args} { error "no write" }
+	yosys {*}$args
+	rename write_sdc {}
+	rename ysta_test_write_sdc write_sdc
+	sync_losses [log_of opensta_net -sync]
 }
 
 # the commands that the syncs in a log report lost or changed

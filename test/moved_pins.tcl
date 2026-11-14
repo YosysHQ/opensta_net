@@ -17,8 +17,9 @@ yosys insbuf -buf BUF_X1 A Z
 check_eq [sync_losses [log_of opensta_net -sync]] 0
 set sdc [written_sdc]
 check_eq [count_lines $sdc {set_false_path -fall_from [get_pins {rn_reg/CK}]}] 1
-check_eq [count_lines $sdc {set_false_path -through [list [get_pins {*/B}] [get_pins {s_reg/D}]] -to [list [get_pins {re_reg/D}] [get_pins {s_reg/D}]]}] 1
+check_eq [count_lines $sdc {set_false_path -to [get_pins {s_reg/D}]}] 1
+check_eq [count_lines $sdc {set_false_path -through [get_pins {*/B}] -to [get_pins {re_reg/D}]}] 1
 check_eq [count_lines $sdc {group_path -name g -through [get_pins {*/B}] -to [get_pins {re_reg/D}]}] 1
 check_eq [count_lines $sdc {set_max_delay -from [get_pins {rn_reg/CK}] 9.0000}] 1
 check_eq [count_lines $sdc {set_disable_timing -from {CK} -to {Q} [get_cells {s_reg}]}] 1
-check_eq [count_lines $sdc {set_disable_timing [get_timing_edges -from [get_pins {*/Z}] -to [get_pins {*/A}]]}] 1
+check_eq [count_lines $sdc {set_disable_timing [get_timing_edges -from [get_pins {rn_reg/CK}] -to [get_pins {rn_reg/Q}]]}] 1

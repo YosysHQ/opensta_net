@@ -12,4 +12,4 @@ proc ::write_sdc {args} {
 yosys delete top/u_inv1
 set log [log_of opensta_net -sync]
 check_eq [sync_losses $log] 1
-check_eq [lost_cmds $log] [list {set_max_delay 5 -through [get_pins {u_inv1/Y}]}]
+check_eq [lost_cmds $log] [list {set_max_delay 5 -through [get_pins u_inv1/Y]}]

@@ -128,7 +128,8 @@ std::string tclQuoted(const std::string &text)
 // get_ports takes * and ? as wildcards, find_port the exact name
 std::string objectHandle(ysta::Handle handle)
 {
-	static const char *getters[] = {"get_cells", "get_pins", "get_nets"};
+	// a getter walks each bus bit of the cell, a finder takes the exact name
+	static const char *finders[] = {"::sta::find_instance ", "::sta::find_pin ", "::sta::find_net "};
 	log_assert(handle.kind() != ysta::Handle::Kind::Term);
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	if (handle.kind() == ysta::Handle::Kind::Pin && staNetwork().isTopLevelPort(handle)) {
@@ -141,9 +142,8 @@ std::string objectHandle(ysta::Handle handle)
 	Tcl_CmdInfo info;
 	// make the swig command of the handle
 	if (!Tcl_GetCommandInfo(interp, name.c_str(), &info)) {
-		std::string object_name = objectName(the_sta->sdcNetwork(), handle);
-		std::string getter = getters[int(handle.kind())] + std::string(" -quiet ") + tclQuoted(object_name);
-		Tcl_EvalEx(interp, getter.c_str(), -1, TCL_EVAL_GLOBAL);
+		std::string finder = finders[int(handle.kind())] + tclQuoted(objectName(&staNetwork(), handle));
+		Tcl_EvalEx(interp, finder.c_str(), -1, TCL_EVAL_GLOBAL);
 	}
 	return name;
 }

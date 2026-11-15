@@ -34,6 +34,7 @@ void Epochs::end()
 	// a stale view cannot anchor its objects in the changed design, the sync then runs the journal again by name
 	if (staNetwork().view().upToDate())
 		capture();
+	staNetwork().dropHierNames();
 	phase_ = Phase::Ended;
 }
 

@@ -5,6 +5,8 @@ namespace eval ::ysta::byname { namespace path ::ysta::sdc }
 namespace eval ::ysta {
 	# {mode cmd} of the succeeded constraint commands since the last capture, see name_journal
 	variable journal {}
+	# the commands that run now with each clock as the getter of its name, see enter
+	variable entered {}
 	# {{mode family} cmd} of the commands write_sdc does not write, a capture adds them, the apply records them again
 	variable kept {}
 	# a kept command keeps the later ones of its family, they run in the order given
@@ -53,16 +55,25 @@ foreach {why cmds} {
 foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
 foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_edit }
 
+# a command can delete a clock, so a journal command has no clock handle, only the getter of its name
+proc ::ysta::enter {cmd op} {
+	foreach clock [regexp -all -inline {\m_[0-9a-f]+_p_Clock\M} $cmd] {
+		set cmd [string map [list $clock [list "\[get_clocks [list [get_name $clock]]\]"]] $cmd]
+	}
+	lappend ::ysta::entered $cmd
+}
 proc ::ysta::record {cmd code result op} {
+	set named [lindex $::ysta::entered end]
+	set ::ysta::entered [lrange $::ysta::entered 0 end-1]
 	if {$code != 0} return
-	lappend ::ysta::journal [list [::sta::cmd_mode_name] $cmd]
+	lappend ::ysta::journal [list [::sta::cmd_mode_name] $named]
 	if {[catch {llength $cmd}]} return
 	set name [namespace tail [lindex $cmd 0]]
 	set family [list [::sta::cmd_mode_name]]
 	if {[dict exists $::ysta::families $name]} { lappend family [dict get $::ysta::families $name] }
 	set in_family [expr {[llength $family] == 2 && [lsearch -exact -index 0 $::ysta::kept $family] >= 0}]
 	if {!$in_family && ![::ysta::unwritten $name $cmd]} return
-	lappend ::ysta::kept [list $family [::ysta::activity_as_density [lreplace $cmd 0 0 $name]]]
+	lappend ::ysta::kept [list $family [::ysta::activity_as_density [lreplace $named 0 0 $name]]]
 }
 # set_power_activity -activity as -density over the min clock period of now
 proc ::ysta::activity_as_density {cmd} {
@@ -162,6 +173,8 @@ proc ::ysta::unwritten {name cmd} {
 # the names of the objects in a word as script words, nested lists flat, none when the word has no object
 # an object is the getter of its type or of other, else its name, a token in token mode for a pin, a cell or a net
 proc ::ysta::names {word getters} {
+	# a clock getter of enter stays
+	if {[string match {\[get_clocks *\]} $word]} { return [list $word] }
 	if {[::sta::is_object $word]} {
 		set name [list [get_full_name $word]]
 		set type [::sta::object_type $word]
@@ -216,6 +229,8 @@ foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
 	if {[info commands ::sta::$cmd] eq {}} continue
+	trace add execution ::sta::$cmd enter ::ysta::enter
+	# the last trace runs first, a sync inside it runs commands of this name, they skip only a trace that runs
 	trace add execution ::sta::$cmd enter ::ysta::sync_first
 	trace add execution ::sta::$cmd leave ::ysta::record
 	interp alias {} ::ysta::sdc::$cmd {} ::ysta::run $cmd

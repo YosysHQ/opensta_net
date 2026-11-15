@@ -34,10 +34,10 @@ class Epochs {
 		Building // in link or sync, no nested sync
 	};
 public:
-	bool syncForQuery(Design *design); // before each OpenSTA query, true when queries see the network
-	bool stale() const; // unlinked or older than the design, not when Stopped
 	// Open -> capture -> Ended, before each pass but opensta_net, rtlil::set_attr and rtlil::set_param
 	void end();
+	bool stale() const; // unlinked or older than the design, not when Stopped
+	bool syncForQuery(Design *design); // before each OpenSTA query, true when queries see the network
 	// Open, Ended -> Open, a failed build or an unbuildable design -> Ended, throws -> Stopped
 	void sync(Design *design);
 	void link(Design *design); // any phase -> Open, unbuildable keeps it, failed build -> Stopped
@@ -68,28 +68,25 @@ struct PassOptions {
 };
 
 bool tclEval(const std::string &script);
-
-// see epoch.cc
-bool canBuild(Design *design);
-void warnDroppedParasitics();
-void dropView();
-bool linkView(Design *design, std::string &error);
-
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclAfterEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-
-void makeSta();
-void bootTcl();
 bool topHasScopes(Design *design); // a cell of the top is a module instance
 void beforePass(Yosys::Pass *pass, Design *design);
+void makeSta();
+void bootTcl();
 void bootSta();
-
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
 void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
 // evals command {file} tail, nothing when there is no file
 void sourceFile(const std::string &file, const std::string &command, const std::string &tail);
 void evalTcl(const std::string &cmd);
+
+// see epoch.cc
+bool canBuild(Design *design);
+void warnDroppedParasitics();
+void dropView();
+bool linkView(Design *design, std::string &error);
 
 struct OpenstaNetPass : public Yosys::Pass {
 	OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}

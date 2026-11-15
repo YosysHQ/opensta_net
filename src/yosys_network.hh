@@ -122,6 +122,7 @@ public:
 	void unlink();
 	// unlinked, view() refuses, topInstance() is null and the tables are empty
 	bool linked() const { return view_ != nullptr; }
+	void dropHierNames() { hier_names_.clear(); } // a pass can change an hdlname, the view fingerprint has none
 	NetView &view() const; // of the link
 	// Netlist::CellLibrary from liberty cells, an unmapped internal cell errors
 	bool describe(Netlist::CellType &type) override;
@@ -227,11 +228,11 @@ private:
 		std::vector<sta::ConcretePort *> bit_ports; // scalar or bus bit, by position in Instance::pins
 		Yosys::dict<const sta::ConcretePort *, uint32_t> pin_of_port; // the position of a bit port
 	};
-	sta::ConcreteCell *concreteCell(const Netlist::Instance *inst);
-	sta::ConcreteCell *makeShapedCell(const Netlist::Instance &inst);
-	sta::ConcretePort *bitPort(sta::ConcreteCell *ccell, const Netlist::Port &shape, int bit) const;
 	size_t buildTables(Netlist::Instance *scope);
 	void addCell(const Netlist::Instance *inst);
+	sta::ConcreteCell *concreteCell(const Netlist::Instance *inst);
+	sta::ConcretePort *bitPort(sta::ConcreteCell *ccell, const Netlist::Port &shape, int bit) const;
+	sta::ConcreteCell *makeShapedCell(const Netlist::Instance &inst);
 	void refuseHandle() const; // error 2931, throws, the network stays
 	const Netlist::Instance *record(const sta::Instance *inst) const { return recordOf(inst, &NetView::instances); }
 	const Netlist::Pin *record(const sta::Pin *pin) const { return recordOf(pin, &NetView::pins); }

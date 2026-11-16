@@ -14,7 +14,7 @@ struct YosysSta;
 extern YosysSta *the_sta;
 bool queryHook();
 
-// logs to every sink but the console, the Tcl channel prints there
+// skips the console, the Tcl channel prints there
 struct NonConsoleTee {
 	const Yosys::LogMessage &msg;
 	void operator()(Yosys::LogSink &sink) const;
@@ -49,7 +49,7 @@ struct YosysSta : public sta::Sta {
 	std::vector<SdcObjectRef> refs; // refs[N] of token N, commands in ::ysta::captured
 	CommandLoss loss;               // of the command the sync applies now
 	Yosys::NetTracker tracker;
-	bool track_barriers = true;     // -link until -unprotect, a $barrier or keep holds each ref
+	bool track_barriers = true;     // -link or -protect until -unprotect, a $barrier or keep holds each ref
 	bool autosync = false;          // sync after each Tcl edit command
 
 	Epochs epochs;

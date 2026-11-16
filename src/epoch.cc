@@ -58,7 +58,6 @@ bool Epochs::syncForQuery(Design *design)
 	return phase_ == Phase::Open;
 }
 
-// warns when the reason changes
 bool canBuild(Design *design)
 {
 	std::string reason;

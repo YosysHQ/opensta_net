@@ -23,7 +23,6 @@ Handles SdcObjectRef::objects(WireAs wire_as) const
 
 ysta::YosysNetwork &staNetwork() { return static_cast<ysta::YosysNetwork &>(*the_sta->network()); }
 
-// one ref per token at its index, replaces the old refs
 // a new ref has one object, the kernel resolve sets its result
 void makeRefs(const ysta::TokenIndexes &tokens)
 {
@@ -65,7 +64,6 @@ std::vector<TrackedRef *> trackedRefs()
 	return tracked;
 }
 
-// nullptr when not a token of the last capture
 SdcObjectRef *tokenRef(std::string_view word)
 {
 	std::string_view prefix = ysta::detail::token_prefix;
@@ -133,7 +131,6 @@ std::string tclQuoted(const std::string &text)
 	return quoted;
 }
 
-// SWIG object name, a top pin gives its port
 // get_ports takes * and ? as wildcards, find_port the exact name
 std::string objectHandle(ysta::Handle handle)
 {

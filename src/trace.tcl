@@ -366,7 +366,7 @@ proc ::ysta::run_scripts {space scripts} {
 		if {![mode_exists $mode]} continue
 		::sta::set_cmd_mode $mode
 		set failed [catch {namespace eval $space $text} error]
-		# one line for the log text, write_sdc breaks a command with line continuations
+		# one line for the log text, a user word of a kept or replay script can have a backslash-newline
 		set log_text [string trim [regsub -all {\s+} [string map {"\\\n" " "} $text] { }]]
 		incr lost [loss $failed $error $log_text]
 	}

@@ -56,7 +56,7 @@ namespace detail {
 constexpr std::string_view token_prefix = "__ysta_tok_";
 constexpr std::string_view stale_name = "__ysta_stale"; // net of an earlier network, see write_sdc_cmd in trace.tcl
 
-using NameMap = std::map<std::string, Handle, std::less<>>; // handles by sta name
+using NameMap = std::map<std::string, Handle, std::less<>>;
 
 std::string staName(std::string_view raw);
 std::string staNetName(const Netlist::Net *net, std::string path = "");
@@ -67,7 +67,6 @@ void reversePortRuns(Netlist::PinList &pins);
 Yosys::RTLIL::PortDir portDir(const sta::PortDirection *direction);
 sta::PortDirection *staDirection(Yosys::RTLIL::PortDir dir);
 
-// instance ids count from 0, pin and net ids from 1
 template <typename Record> constexpr uint32_t first_id = std::is_same_v<Record, Netlist::Instance> ? 0 : 1;
 
 template <typename Map> typename Map::mapped_type valueOrEmpty(const Map &map, std::string_view key)
@@ -78,7 +77,6 @@ template <typename Map> typename Map::mapped_type valueOrEmpty(const Map &map, s
 	return it->second;
 }
 
-// false when no name matches
 template <typename Seq> bool appendMatches(const NameMap &names, const sta::PatternMatch *pattern, Seq &matches)
 {
 	size_t count = matches.size();
@@ -203,7 +201,6 @@ public:
 protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
-	// sta cell of a view cell type
 	struct StaCell {
 		sta::ConcreteCell *cell = nullptr;
 		std::vector<sta::ConcretePort *> bit_ports;                   // scalar or bus bits, in Instance::pins order
@@ -224,7 +221,7 @@ private:
 	const Netlist::Net *record(const sta::Net *net) const { return recordOf(net, &NetView::nets); }
 	std::unique_ptr<NetView> view_;
 	uint32_t generation_ = 1;                                         // link() bumps, unlink() keeps, old handles fail
-	TokenIndexes *tokens_ = nullptr;                                  // token mode when set
+	TokenIndexes *tokens_ = nullptr;
 	int names_stale_nets_ = 0;                                        // set by write_sdc, old nets get the stale name
 	sta::Library *design_lib_ = nullptr;
 	EpochHook open_epoch_hook_;                                       // queryHook, relinks a changed design

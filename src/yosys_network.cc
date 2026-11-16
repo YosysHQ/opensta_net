@@ -179,7 +179,6 @@ size_t YosysNetwork::link(std::unique_ptr<NetView> view)
 	return shared_names;
 }
 
-// epoch.cc calls it before each link and after a throw in sync or link
 void YosysNetwork::unlink()
 {
 	// the cells and ports outlive the link
@@ -393,7 +392,8 @@ sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_
 	return child;
 }
 
-void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern, sta::InstanceSeq &matches) const
+void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern,
+                                        sta::InstanceSeq &matches) const
 {
 	if (!pattern->hasWildcards())
 		sta::Network::findChildrenMatching(parent, pattern, matches);
@@ -482,7 +482,6 @@ sta::ObjectId YosysNetwork::id(const sta::Net *net) const
 	return net != nullptr ? record(net)->id : sta::object_id_null;
 }
 
-// a constant net wins its name
 sta::Net *YosysNetwork::findNet(const sta::Instance *instance, std::string_view net_name) const
 {
 	Handle net = detail::valueOrEmpty(scopeNames(instance).nets, net_name);
@@ -491,7 +490,8 @@ sta::Net *YosysNetwork::findNet(const sta::Instance *instance, std::string_view 
 	return net;
 }
 
-void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern, sta::NetSeq &matches) const
+void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern,
+                                        sta::NetSeq &matches) const
 {
 	if (!pattern->hasWildcards()) {
 		if (sta::Net *net = findNet(instance, pattern->pattern()); net != nullptr)

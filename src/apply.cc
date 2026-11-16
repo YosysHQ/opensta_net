@@ -9,7 +9,6 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
-// objects of a token word, an error when it finds none
 int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 1, 2, "word ?wire_as?"))
@@ -255,7 +254,7 @@ void cutArcPaths(ArcCut &arc, const sta::Pin *pin)
 	}
 }
 
-// what the pin reaches in the new logic, a target or another end, a timing check counts as check_reach
+// a timing check counts as check_reach
 ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_reach, const Handles &targets,
                     const Handles &ends, PinSet &seen)
 {
@@ -283,7 +282,6 @@ ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_re
 	return mask;
 }
 
-// words of an arc disable on the new network
 // a found cell has the port names a pass gave, ports not on one cell give the edges of appendArcEdges
 int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
@@ -357,7 +355,6 @@ void addPathEnds(const sta::Pin *pin, Handles &ends)
 	}
 }
 
-// adds the first starts after the pin, those an inverting arc clocks go to inverted_starts
 void addStartsBehind(const sta::Pin *pin, Polarity polarity, MovedEnds &found, SeenStarts &seen)
 {
 	if (!seen.insert({pin, polarity}).second)
@@ -440,7 +437,6 @@ int tclMissing(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 	return TCL_OK;
 }
 
-// logs a lost or changed command, result 1 for such a command
 int tclLoss(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 3, 3, "failed error script"))

@@ -19,3 +19,12 @@ check_eq [llength [all_clocks]] 1
 set held [get_clocks virt]
 yosys add -wire dummy3 top
 check_eq [catch {set_clock_transition 0.1 $held}] 1
+# a query can do the rebuild before the command, a handle of this network works
+set held [get_clocks virt]
+set edge [get_timing_edges -from [get_pins u_inv1/A] -to [get_pins u_inv1/Y]]
+set_disable_timing $edge
+yosys add -wire dummy4 top
+get_ports clk
+check_eq [catch {set_clock_transition 0.1 $held}] 1
+check_eq [catch {set_disable_timing $edge}] 1
+set_clock_transition 0.1 [get_clocks virt]

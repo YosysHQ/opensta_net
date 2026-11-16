@@ -16,6 +16,8 @@ namespace eval ::ysta {
 	variable hier_disables {}
 	# from 1 on old clock handles and stale nets exist
 	variable rebuilds 0
+	# clock and edge handles that a getter gave since the last rebuild, see note_handles
+	variable live_handles
 	# linked to C++, while set old nets get a stale name
 	variable writing_sdc
 
@@ -126,6 +128,7 @@ proc ::ysta::undo_hier_disables {} {
 }
 proc ::ysta::clear {} {
 	undo_hier_disables
+	array unset ::ysta::live_handles
 	foreach name {journal kept replay captured} { set ::ysta::$name {} }
 }
 
@@ -255,6 +258,8 @@ proc ::ysta::named {cmd {getters {Clock get_clocks}}} {
 }
 # runs before the link, while a handle still gives its name
 proc ::ysta::name_journal {} {
+	# the link frees the clocks and edges also when it fails
+	array unset ::ysta::live_handles
 	set getters {
 		Clock get_clocks Pin get_pins Instance get_cells Net get_nets Port get_ports
 		LibertyCell get_lib_cells LibertyLibrary get_libs other ::ysta::missing
@@ -389,6 +394,8 @@ proc ::ysta::apply {} {
 	::sta::set_cmd_scene $scene
 	::sta::set_cmd_mode $cmd_mode
 	info script $script
+	# a new clock can get the handle word of an old one, so the handles that the scripts got do not stay
+	array unset ::ysta::live_handles
 	return $lost
 }
 
@@ -437,12 +444,22 @@ proc ::sta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timestam
 	::ysta::drop_stale_lines $path $gzip
 }
 
-# a query syncs first so the next capture has the command, a rebuild frees the clocks, we refuse an old clock handle
+# a rebuild frees the clocks and the timing edges, a new object can get the memory of an old one
+proc ::ysta::note_handles {cmd code result op} {
+	foreach handle [regexp -all -inline {\m_[0-9a-f]+_p_(?:Clock|Edge)\M} $result] {
+		set ::ysta::live_handles($handle) 1
+	}
+}
+foreach cmd {get_clocks find_clock get_property get_timing_edges} {
+	trace add execution ::sta::$cmd leave ::ysta::note_handles
+}
+# a query syncs first so the next capture has the command, we refuse a handle that no getter gave since the rebuild
 proc ::ysta::sync_first {cmd op} {
-	set rebuilds $::ysta::rebuilds
 	::sta::network_is_linked
-	if {$rebuilds != $::ysta::rebuilds && [string match *_p_Clock* $cmd]} {
-		error "Error: 2931 a clock handle of an earlier network names no object, get the clock again."
+	foreach {handle type} [regexp -all -inline {\m_[0-9a-f]+_p_(Clock|Edge)\M} $cmd] {
+		if {[info exists ::ysta::live_handles($handle)]} continue
+		set object [dict get {Clock clock Edge {timing edge}} $type]
+		error "Error: 2931 a $object handle of an earlier network names no object, get the $object again."
 	}
 }
 foreach cmd {get_clocks all_clocks} { trace add execution ::sta::$cmd enter ::ysta::sync_first }

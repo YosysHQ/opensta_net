@@ -7,6 +7,7 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
+// a wire is its loads, they have the paths through the old object, see WireAs
 Handles SdcObjectRef::objects(WireAs wire_as) const
 {
 	if (isWire() && wire_as == WireAs::None && kind != Kind::Pin)
@@ -22,8 +23,9 @@ Handles SdcObjectRef::objects(WireAs wire_as) const
 
 ysta::YosysNetwork &staNetwork() { return static_cast<ysta::YosysNetwork &>(*the_sta->network()); }
 
+// one ref per token at its index, replaces the old refs
 // a new ref has one object, the kernel resolve sets its result
-void makeRefs(const std::map<ysta::Handle, size_t> &tokens)
+void makeRefs(const ysta::TokenIndexes &tokens)
 {
 	const ysta::YosysNetwork &network = staNetwork();
 	the_sta->refs.assign(tokens.size(), SdcObjectRef{});
@@ -63,6 +65,7 @@ std::vector<TrackedRef *> trackedRefs()
 	return tracked;
 }
 
+// nullptr when not a token of the last capture
 SdcObjectRef *tokenRef(std::string_view word)
 {
 	std::string_view prefix = ysta::detail::token_prefix;
@@ -71,11 +74,13 @@ SdcObjectRef *tokenRef(std::string_view word)
 	size_t index = 0;
 	const char *end = word.data() + word.size();
 	auto [last, error] = std::from_chars(word.data() + prefix.size(), end, index);
-	if (error != std::errc() || last != end || index >= the_sta->refs.size())
+	bool is_index = error == std::errc() && last == end;
+	if (!is_index || index >= the_sta->refs.size())
 		return nullptr;
 	return &the_sta->refs[index];
 }
 
+// tokens as the user names of their refs
 std::string namedText(const std::string &text)
 {
 	std::string_view prefix = ysta::detail::token_prefix;
@@ -88,7 +93,10 @@ std::string namedText(const std::string &text)
 		std::string token = text.substr(next, end - next);
 		SdcObjectRef *ref = tokenRef(token);
 		named += text.substr(at, next - at);
-		named += ref != nullptr ? ref->name : token;
+		if (ref != nullptr)
+			named += ref->name;
+		else
+			named += token;
 		at = end;
 	}
 	return named + text.substr(at);
@@ -125,6 +133,7 @@ std::string tclQuoted(const std::string &text)
 	return quoted;
 }
 
+// SWIG object name, a top pin gives its port
 // get_ports takes * and ? as wildcards, find_port the exact name
 std::string objectHandle(ysta::Handle handle)
 {
@@ -140,9 +149,10 @@ std::string objectHandle(ysta::Handle handle)
 	}
 	std::string name = handle.swigName();
 	Tcl_CmdInfo info;
-	// make the swig command of the handle
+	// the finder makes the swig command of the handle
 	if (!Tcl_GetCommandInfo(interp, name.c_str(), &info)) {
-		std::string finder = finders[int(handle.kind())] + tclQuoted(objectName(&staNetwork(), handle));
+		std::string object_name = objectName(&staNetwork(), handle);
+		std::string finder = finders[int(handle.kind())] + tclQuoted(object_name);
 		Tcl_EvalEx(interp, finder.c_str(), -1, TCL_EVAL_GLOBAL);
 	}
 	return name;

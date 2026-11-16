@@ -11,8 +11,8 @@ namespace opensta_net {
 using Yosys::RTLIL::Design;
 
 struct YosysSta;
-extern YosysSta *the_sta; // made by makeSta
-bool queryHook(); // Epochs::syncForQuery of the_sta
+extern YosysSta *the_sta;
+bool queryHook();
 
 // logs to every sink but the console, the Tcl channel prints there
 struct NonConsoleTee {
@@ -21,39 +21,36 @@ struct NonConsoleTee {
 };
 
 struct YosysStaReport : public sta::ReportTcl {
-	size_t printConsole(const char *buffer, size_t length) override; // redirected output is not console output
+	size_t printConsole(const char *buffer, size_t length) override;
 };
 
-// adapter loop, see epoch.cc
-// end -> capture -> change -> query -> sync -> rebuild -> resolveAndApply
+// the adapter loop, end -> capture -> change -> query -> sync -> rebuild -> resolveAndApply
 class Epochs {
 	enum class Phase : uint8_t {
 		Stopped, // no network until link
 		Open,    // queries see the network
-		Ended,   // maybe stale or unlinked, the next query syncs
+		Ended,   // maybe stale or unlinked, next query syncs
 		Building // in link or sync, no nested sync
 	};
 public:
-	// Open -> capture -> Ended, before each pass but opensta_net, rtlil::set_attr and rtlil::set_param
 	void end();
-	bool stale() const; // unlinked or older than the design, not when Stopped
-	bool syncForQuery(Design *design); // before each OpenSTA query, true when queries see the network
-	// Open, Ended -> Open, a failed build or an unbuildable design -> Ended, throws -> Stopped
+	bool stale() const;
+	bool syncForQuery(Design *design);
 	void sync(Design *design);
-	void link(Design *design); // any phase -> Open, unbuildable keeps it, failed build -> Stopped
+	void link(Design *design);
 	void unprotect(Design *design);
 private:
-	void capture(); // write_sdc with object tokens, each anchors its rtlil objects
-	Phase rebuild(Design *design); // link then resolveAndApply
+	void capture();
+	Phase rebuild(Design *design);
 	Phase phase_ = Phase::Stopped;
 };
 
 struct YosysSta : public sta::Sta {
-	std::vector<SdcObjectRef> refs; // refs[N] is of token N of the last capture, its commands are ::ysta::captured
-	CommandLoss loss; // of the command the sync applies now
+	std::vector<SdcObjectRef> refs; // refs[N] of token N, commands in ::ysta::captured
+	CommandLoss loss;               // of the command the sync applies now
 	Yosys::NetTracker tracker;
-	bool track_barriers = true; // from -link until -unprotect a $barrier or a keep holds each ref through passes
-	bool autosync = false; // sync after each Tcl edit command
+	bool track_barriers = true;     // -link until -unprotect, a $barrier or keep holds each ref
+	bool autosync = false;          // sync after each Tcl edit command
 
 	Epochs epochs;
 	std::string last_unbuildable_reason;
@@ -70,7 +67,7 @@ struct PassOptions {
 bool tclEval(const std::string &script);
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
 int tclAfterEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-bool topHasScopes(Design *design); // a cell of the top is a module instance
+bool topHasScopes(Design *design);
 void beforePass(Yosys::Pass *pass, Design *design);
 void makeSta();
 void bootTcl();
@@ -78,11 +75,9 @@ void bootSta();
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
 void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
-// evals command {file} tail, nothing when there is no file
 void sourceFile(const std::string &file, const std::string &command, const std::string &tail);
 void evalTcl(const std::string &cmd);
 
-// see epoch.cc
 bool canBuild(Design *design);
 void warnDroppedParasitics();
 void dropView();

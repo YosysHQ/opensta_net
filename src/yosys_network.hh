@@ -18,16 +18,15 @@ namespace Netlist = Yosys::Netlist;
 using Yosys::NetView;
 
 template <typename T, typename... Types> constexpr bool is_one_of = (std::is_same_v<T, Types> || ...);
-// the sta object types a handle stands for
 template <typename T>
 concept StaObject = is_one_of<std::remove_const_t<T>, sta::Instance, sta::Pin, sta::Net, sta::Term>;
 
-// a view record id packed into an sta object pointer, OpenSTA never gets a record pointer
+// view record id packed into an sta object pointer, OpenSTA gets no record pointer
 struct Handle {
 	enum class Kind : uint8_t { Instance, Pin, Net, Term };
 	static constexpr uint64_t generation_mask = (1u << 29) - 1;
 
-	// 63    handle? (1 => handle)
+	// 63    1 for a handle
 	// 61-62 kind
 	// 32-60 generation
 	// 0-31  record id
@@ -39,7 +38,7 @@ struct Handle {
 	Kind kind() const { return Kind(bits >> 61 & 3); }
 	uint32_t generation() const { return bits >> 32 & generation_mask; }
 	uint32_t id() const { return uint32_t(bits); }
-	std::string swigName() const; // the SWIG object name in Tcl
+	std::string swigName() const;
 	auto operator<=>(const Handle &) const = default;
 };
 
@@ -48,32 +47,30 @@ constexpr Handle::Kind recordKind(const Netlist::Pin *) { return Handle::Kind::P
 constexpr Handle::Kind recordKind(const Netlist::Net *) { return Handle::Kind::Net; }
 template <typename Record> constexpr Handle::Kind record_kind = recordKind(static_cast<const Record *>(nullptr));
 
+using TokenIndexes = std::map<Handle, size_t>; // N of __ysta_tok_N by object
+using EpochHook = bool (*)();
+template <typename Record> using ViewTableGetter = const std::deque<Record> &(NetView::*)() const;
+
 namespace detail {
 
 constexpr std::string_view token_prefix = "__ysta_tok_";
-// of a net of an earlier network, see ::sta::write_sdc_cmd in trace.tcl
-constexpr std::string_view stale_name = "__ysta_stale";
+constexpr std::string_view stale_name = "__ysta_stale"; // net of an earlier network, see write_sdc_cmd in trace.tcl
 
 using NameMap = std::map<std::string, Handle, std::less<>>; // handles by sta name
 
 std::string staName(std::string_view raw);
-// a flat net takes the hdlname path of its wire for the wire name, see hierName
 std::string staNetName(const Netlist::Net *net, std::string path = "");
-// u1\/r for the hdlname "u1 r" that flatten gives the cell u1.r, empty for an object of no dissolved scope
 std::string hierName(const Yosys::RTLIL::AttrObject *object);
-// a name of two objects names none of them
 void addName(NameMap &names, const std::string &name, Handle handle);
 
-// pin order as ConcreteNetwork gives it
-void reversePortRuns(std::vector<Netlist::Pin *> &pins);
+void reversePortRuns(Netlist::PinList &pins);
 Yosys::RTLIL::PortDir portDir(const sta::PortDirection *direction);
 sta::PortDirection *staDirection(Yosys::RTLIL::PortDir dir);
 
 // instance ids count from 0, pin and net ids from 1
 template <typename Record> constexpr uint32_t first_id = std::is_same_v<Record, Netlist::Instance> ? 0 : 1;
 
-// the map value, or an empty one
-template <typename Map> typename Map::mapped_type lookup(const Map &map, std::string_view key)
+template <typename Map> typename Map::mapped_type valueOrEmpty(const Map &map, std::string_view key)
 {
 	auto it = map.find(key);
 	if (it == map.end())
@@ -81,7 +78,7 @@ template <typename Map> typename Map::mapped_type lookup(const Map &map, std::st
 	return it->second;
 }
 
-// adds the handles of the names that match, false when none
+// false when no name matches
 template <typename Seq> bool appendMatches(const NameMap &names, const sta::PatternMatch *pattern, Seq &matches)
 {
 	size_t count = matches.size();
@@ -92,7 +89,6 @@ template <typename Seq> bool appendMatches(const NameMap &names, const sta::Patt
 	return matches.size() != count;
 }
 
-// iterator over the sta objects of handles
 template <typename T> class SeqIterator : public sta::Iterator<T> {
 	std::vector<T> seq_;
 	size_t index_ = 0;
@@ -104,7 +100,7 @@ public:
 
 } // namespace detail
 
-// errors go through report_->error, which throws sta::Exception
+// errors go through report_->error, it throws sta::Exception
 // token mode changes what write_sdc writes, see setTokens
 class YosysNetwork : public sta::ConcreteNetwork, public Netlist::CellLibrary {
 public:
@@ -112,32 +108,24 @@ public:
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
 
-	// queryHook -> Epochs::syncForQuery, relinks if the design changed
-	explicit YosysNetwork(bool (*open_epoch_hook)()) : open_epoch_hook_(open_epoch_hook) {}
+	explicit YosysNetwork(EpochHook open_epoch_hook) : open_epoch_hook_(open_epoch_hook) {}
 
-	// link
-	// needs unlinked, returns how many wires have the name of a constant net, linkView warns
 	size_t link(std::unique_ptr<NetView> view);
-	// drops the view and the tables, epoch.cc calls it before each link and after a throw in sync or link
 	void unlink();
-	// unlinked, view() refuses, topInstance() is null and the tables are empty
+	// when unlinked view() refuses, topInstance() is null, the tables are empty
 	bool linked() const { return view_ != nullptr; }
 	void dropHierNames() { hier_names_.clear(); } // a pass can change an hdlname, the view fingerprint has none
-	NetView &view() const; // of the link
-	// Netlist::CellLibrary from liberty cells, an unmapped internal cell errors
+	NetView &view() const;
 	bool describe(Netlist::CellType &type) override;
-	// OpenSTA asks before each network read, see Sta::ensureLinked
 	bool isLinked() const override;
 
-	// write_sdc modes
 	// token mode while set, see Epochs::capture
 	// non-top instances, pins, nets and scalar top ports get token names
-	void setTokens(std::map<Handle, size_t> *tokens) { tokens_ = tokens; }
-	std::string token(Handle handle) const; // __ysta_tok_N, N is the map value of the handle
+	void setTokens(TokenIndexes *tokens) { tokens_ = tokens; }
+	std::string token(Handle handle) const;
 	// Tcl links ::ysta::writing_sdc to it, see names_stale_nets_
 	int *staleNetNamesFlag() { return &names_stale_nets_; }
 
-	// Instance
 	sta::Instance *topInstance() const override;
 	std::string name(const sta::Instance *instance) const override;
 	sta::ObjectId id(const sta::Instance *instance) const override;
@@ -157,7 +145,6 @@ public:
 	sta::InstancePinIterator *pinIterator(const sta::Instance *instance) const override;
 	sta::InstanceNetIterator *netIterator(const sta::Instance *instance) const override;
 
-	// Pin, and the name of a top Port
 	sta::ObjectId id(const sta::Pin *pin) const override;
 	sta::Instance *instance(const sta::Pin *pin) const override;
 	sta::Net *net(const sta::Pin *pin) const override;
@@ -166,21 +153,17 @@ public:
 	sta::PortDirection *direction(const sta::Pin *pin) const override;
 	sta::VertexId vertexId(const sta::Pin *pin) const override;
 	void setVertexId(sta::Pin *pin, sta::VertexId id) override;
-	// in token mode, so write_sdc writes a hierarchical -through pin as itself
 	bool isLeaf(const sta::Pin *pin) const override;
 	std::string pathName(const sta::Pin *pin) const override;
 	std::string name(const sta::Port *port) const override;
 
-	// Term
 	sta::ObjectId id(const sta::Term *term) const override;
 	sta::Net *net(const sta::Term *term) const override;
 	sta::Pin *pin(const sta::Term *term) const override;
 
-	// Net
 	std::string name(const sta::Net *net) const override;
 	sta::ObjectId id(const sta::Net *net) const override;
 	std::string pathName(const sta::Net *net) const override;
-	// by sta name in the scope, a constant net wins its name
 	sta::Net *findNet(const sta::Instance *instance, std::string_view net_name) const override;
 	void findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern,
 	                          sta::NetSeq &matches) const override;
@@ -190,7 +173,6 @@ public:
 	bool isPower(const sta::Net *net) const override;
 	bool isGround(const sta::Net *net) const override;
 
-	// handles and records
 	// a Term is the inside of a scope pin (pin->inner), its handle is the pin id with Kind::Term
 	template <typename Record> Handle handle(const Record *record, Handle::Kind kind = record_kind<Record>) const
 	{
@@ -206,10 +188,9 @@ public:
 			result.push_back(handle(record, kind));
 		return result;
 	}
-	// decodes a handle of a view table, unlinked or another generation is an error
+	// unlinked or another generation is an error
 	template <typename Record>
-	const Record *recordOf(Handle handle, const std::deque<Record> &(NetView::*table)() const,
-	                       Handle::Kind kind = record_kind<Record>) const
+	const Record *recordOf(Handle handle, ViewTableGetter<Record> table, Handle::Kind kind = record_kind<Record>) const
 	{
 		if (handle.bits == 0)
 			return nullptr;
@@ -222,18 +203,18 @@ public:
 protected:
 	void visitConnectedPins(const sta::Net *net, sta::PinVisitor &visitor, sta::NetSet &visited_nets) const override;
 private:
-	// the sta cell of a view cell type
+	// sta cell of a view cell type
 	struct StaCell {
 		sta::ConcreteCell *cell = nullptr;
-		std::vector<sta::ConcretePort *> bit_ports; // scalar or bus bit, by position in Instance::pins
-		Yosys::dict<const sta::ConcretePort *, uint32_t> pin_of_port; // the position of a bit port
+		std::vector<sta::ConcretePort *> bit_ports;                   // scalar or bus bits, in Instance::pins order
+		Yosys::dict<const sta::ConcretePort *, uint32_t> pin_of_port; // position of a bit port
 	};
 	size_t buildTables(Netlist::Instance *scope);
 	void addCell(const Netlist::Instance *inst);
 	sta::ConcreteCell *concreteCell(const Netlist::Instance *inst);
 	sta::ConcretePort *bitPort(sta::ConcreteCell *ccell, const Netlist::Port &shape, int bit) const;
 	sta::ConcreteCell *makeShapedCell(const Netlist::Instance &inst);
-	void refuseHandle() const; // error 2931, throws, the network stays
+	void refuseHandle() const;
 	const Netlist::Instance *record(const sta::Instance *inst) const { return recordOf(inst, &NetView::instances); }
 	const Netlist::Pin *record(const sta::Pin *pin) const { return recordOf(pin, &NetView::pins); }
 	const Netlist::Pin *record(const sta::Term *term) const
@@ -242,28 +223,24 @@ private:
 	}
 	const Netlist::Net *record(const sta::Net *net) const { return recordOf(net, &NetView::nets); }
 	std::unique_ptr<NetView> view_;
-	uint32_t generation_ = 1; // link() bumps it, unlink() keeps it to refuse old handles
-	std::map<Handle, size_t> *tokens_ = nullptr; // token mode when set
-	int names_stale_nets_ = 0; // write_sdc sets it, a net of an earlier network then has the stale name
+	uint32_t generation_ = 1;                                         // link() bumps, unlink() keeps, old handles fail
+	TokenIndexes *tokens_ = nullptr;                                  // token mode when set
+	int names_stale_nets_ = 0;                                        // set by write_sdc, old nets get the stale name
 	sta::Library *design_lib_ = nullptr;
-	bool (*open_epoch_hook_)();
+	EpochHook open_epoch_hook_;                                       // queryHook, relinks a changed design
 	sta::AttributeMap no_attributes_;
-	// libraries of earlier links, OpenSTA can still point into them
-	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_;
+	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_; // of earlier links, OpenSTA can point in
 	Yosys::dict<const Netlist::CellType *, StaCell> cells_;
-	std::map<std::string, sta::ConcreteCell *> cells_by_key_; // see concreteCell
-	std::vector<sta::VertexId> pin_vertex_ids_; // by pin id, in the graph of this link
+	std::map<std::string, sta::ConcreteCell *> cells_by_key_;         // see concreteCell
+	std::vector<sta::VertexId> pin_vertex_ids_;                       // by pin id, in the graph of this link
 
-	// the sta names in a scope, by instance id
 	struct ScopeNames {
-		detail::NameMap children, nets;
+		detail::NameMap children;
+		detail::NameMap nets;
 	};
-	std::vector<ScopeNames> scope_names_;
+	std::vector<ScopeNames> scope_names_;               // sta names per scope, by instance id
 	const ScopeNames &scopeNames(const sta::Instance *instance) const;
-	// the flat cells and nets of a scope by hdlname path, so u1/r finds the cell u1.r
-	// by instance id, built at the first miss of a name with a divider
-	mutable std::map<uint32_t, ScopeNames> hier_names_;
-	// none for a name with no divider, and when a child has the first name of the path, a real scope wins
+	mutable std::map<uint32_t, ScopeNames> hier_names_; // hdlname paths by instance id, see hierNames
 	const ScopeNames &hierNames(const sta::Instance *instance, std::string_view name) const;
 };
 

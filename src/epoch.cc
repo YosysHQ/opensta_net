@@ -9,13 +9,14 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
+// write_sdc with object tokens, each anchors its rtlil objects
 void Epochs::capture()
 {
-	std::map<ysta::Handle, size_t> tokens;
+	ysta::TokenIndexes tokens;
 	std::string capture_modes = "::ysta::capture";
 	for (const sta::Mode *mode : the_sta->modes())
 		capture_modes += " " + tclQuoted(mode->name());
-	// the only token mode
+	// token mode only here
 	staNetwork().setTokens(&tokens);
 	bool written = tclEval(capture_modes);
 	staNetwork().setTokens(nullptr);
@@ -27,11 +28,12 @@ void Epochs::capture()
 	the_sta->tracker.checkpoint(staNetwork().view(), trackedRefs(), the_sta->track_barriers);
 }
 
+// Open -> capture -> Ended, before each pass but opensta_net, rtlil::set_attr and rtlil::set_param
 void Epochs::end()
 {
 	if (phase_ != Phase::Open)
 		return;
-	// a stale view cannot anchor its objects in the changed design, the sync then runs the journal again by name
+	// a stale view cannot anchor its objects in the changed design, the sync then replays the journal by name
 	if (staNetwork().view().upToDate())
 		capture();
 	staNetwork().dropHierNames();
@@ -40,9 +42,13 @@ void Epochs::end()
 
 bool Epochs::stale() const
 {
-	return phase_ != Phase::Stopped && (!staNetwork().linked() || !staNetwork().view().upToDate());
+	if (phase_ == Phase::Stopped)
+		return false;
+	bool is_current = staNetwork().linked() && staNetwork().view().upToDate();
+	return !is_current;
 }
 
+// before each OpenSTA query, true when queries see the network
 bool Epochs::syncForQuery(Design *design)
 {
 	if (phase_ == Phase::Building)
@@ -68,6 +74,7 @@ bool canBuild(Design *design)
 	return false;
 }
 
+// Open, Ended -> Open, a failed build or an unbuildable design -> Ended, throws -> Stopped
 void Epochs::sync(Design *design)
 {
 	if (phase_ == Phase::Stopped || phase_ == Phase::Building)
@@ -94,7 +101,7 @@ void Epochs::sync(Design *design)
 Epochs::Phase Epochs::rebuild(Design *design)
 {
 	warnDroppedParasitics();
-	// before the link, the old pins still live
+	// before the link, old pins still live
 	tclEval("::ysta::name_journal");
 	tclEval("::ysta::undo_hier_disables");
 	std::string error;
@@ -153,6 +160,7 @@ bool linkView(Design *design, std::string &error)
 	return true;
 }
 
+// any phase -> Open, an unbuildable design keeps the phase
 // a failed build is a command error, it ends in Stopped, so no query retries it
 void Epochs::link(Design *design)
 {

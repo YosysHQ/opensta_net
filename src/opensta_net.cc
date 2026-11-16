@@ -19,6 +19,7 @@ void NonConsoleTee::operator()(LogSink &sink) const
 		sink.log(msg);
 }
 
+// redirected output is not console output
 size_t YosysStaReport::printConsole(const char *buffer, size_t length)
 {
 	std::string_view text(buffer, length);
@@ -68,7 +69,7 @@ bool topHasScopes(Design *design)
 
 void beforePass(Pass *pass, Design *design)
 {
-	// flatten keeps no name of a scope with a private name, a checkpoint with the names of now keeps such a scope
+	// flatten keeps no name of a private-named scope, a checkpoint with the names of now keeps such a scope
 	// not for the map design of a techmap, a flat design has no scope to keep
 	bool is_flatten = pass->pass_name == "flatten" && design == yosys_get_design();
 	if (is_flatten && the_sta->track_barriers && topHasScopes(design))
@@ -124,12 +125,17 @@ void bootSta()
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 {
 	const std::map<std::string, std::string *> values = {
-		{"-eval", &opt.eval_cmd}, {"-liberty", &opt.liberty_file},
-		{"-source", &opt.source_file}, {"-sdc", &opt.sdc_file}
+		{"-eval", &opt.eval_cmd},
+		{"-liberty", &opt.liberty_file},
+		{"-source", &opt.source_file},
+		{"-sdc", &opt.sdc_file},
 	};
 	const std::map<std::string, bool *> flags = {
-		{"-link", &opt.link}, {"-sync", &opt.sync}, {"-autosync", &opt.autosync},
-		{"-protect", &opt.protect}, {"-unprotect", &opt.unprotect}
+		{"-link", &opt.link},
+		{"-sync", &opt.sync},
+		{"-autosync", &opt.autosync},
+		{"-protect", &opt.protect},
+		{"-unprotect", &opt.unprotect},
 	};
 	size_t argidx;
 	for (argidx = 1; argidx < args.size(); argidx++) {
@@ -178,7 +184,10 @@ void readLiberty(const std::string &file)
 
 void sourceFile(const std::string &file, const std::string &command, const std::string &tail)
 {
-	if (!file.empty() && !tclEval(command + " {" + file + "}" + tail))
+	if (file.empty())
+		return;
+	std::string script = command + " {" + file + "}" + tail;
+	if (!tclEval(script))
 		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(yosys_get_tcl_interp()));
 }
 
@@ -215,10 +224,9 @@ void OpenstaNetPass::help()
 	log("    -protect\n");
 	log("        protect the objects again after -unprotect, the constraints stay.\n\n");
 	log("    -unprotect\n");
-	log("        remove the barriers and keeps (before write_verilog) and put no new\n");
-	log("        ones. A later pass can remove a constrained object, each lost command\n");
-	log("        is reported. A pass can also merge an equal cell into a constrained\n");
-	log("        one, the constraint is then on both.\n\n");
+	log("        remove the barriers (before write_verilog) and put no new ones.\n");
+	log("        A later pass can remove a constrained object, the sync reports it.\n");
+	log("\n");
 	log("    -sdc <file>\n");
 	log("        source an SDC file in the shared interpreter.\n\n");
 	log("    -source <file>\n");

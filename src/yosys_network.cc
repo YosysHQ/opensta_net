@@ -17,7 +17,8 @@ Handle::Handle(Kind kind, uint32_t generation, uint32_t id)
 std::string Handle::swigName() const
 {
 	static const char *types[] = {"Instance", "Pin", "Net", "Term"};
-	return Yosys::stringf("_%016llx_p_%s", (unsigned long long)__builtin_bswap64(bits), types[int(kind())]);
+	unsigned long long swapped_bits = __builtin_bswap64(bits);
+	return Yosys::stringf("_%016llx_p_%s", swapped_bits, types[int(kind())]);
 }
 
 // escapes '/', '[', ']' and '\' as OpenSTA's readers store names
@@ -34,6 +35,7 @@ std::string detail::staName(std::string_view raw)
 	return result;
 }
 
+// a flat net takes the hdlname path of its wire for the wire name, see hierName
 std::string detail::staNetName(const Netlist::Net *net, std::string path)
 {
 	// VerilogReader names
@@ -43,9 +45,12 @@ std::string detail::staNetName(const Netlist::Net *net, std::string path)
 		return "zero_";
 	if (path.empty())
 		path = detail::staName(net->name.wire);
-	return net->name.scalar ? path : path + "[" + std::to_string(net->name.index) + "]";
+	if (net->name.scalar)
+		return path;
+	return path + "[" + std::to_string(net->name.index) + "]";
 }
 
+// u1\/r for the hdlname "u1 r" that flatten gives the cell u1.r, empty for an object of no dissolved scope
 std::string detail::hierName(const Yosys::RTLIL::AttrObject *object)
 {
 	std::string path;
@@ -57,6 +62,7 @@ std::string detail::hierName(const Yosys::RTLIL::AttrObject *object)
 	return detail::staName(path);
 }
 
+// a name of two objects names none of them
 void detail::addName(NameMap &names, const std::string &name, Handle handle)
 {
 	auto [it, fresh] = names.try_emplace(name, handle);
@@ -64,7 +70,8 @@ void detail::addName(NameMap &names, const std::string &name, Handle handle)
 		it->second = {};
 }
 
-void detail::reversePortRuns(std::vector<Netlist::Pin *> &pins)
+// pin order as ConcreteNetwork gives it
+void detail::reversePortRuns(Netlist::PinList &pins)
 {
 	size_t begin = 0;
 	while (begin < pins.size()) {
@@ -85,9 +92,13 @@ Yosys::RTLIL::PortDir detail::portDir(const sta::PortDirection *direction)
 
 sta::PortDirection *detail::staDirection(Yosys::RTLIL::PortDir dir)
 {
-	// in the order of PortDir
-	sta::PortDirection *const directions[] = {sta::PortDirection::unknown(), sta::PortDirection::input(),
-	                                          sta::PortDirection::output(), sta::PortDirection::bidirect()};
+	// PortDir order
+	sta::PortDirection *const directions[] = {
+		sta::PortDirection::unknown(),
+		sta::PortDirection::input(),
+		sta::PortDirection::output(),
+		sta::PortDirection::bidirect(),
+	};
 	return directions[dir];
 }
 
@@ -98,18 +109,20 @@ NetView &YosysNetwork::view() const
 	return *view_;
 }
 
+// throws, the network stays
 void YosysNetwork::refuseHandle() const
 {
 	report_->error(2931, "a handle of an earlier network names no object, get the object again.");
 }
 
+// OpenSTA asks before each network read, see Sta::ensureLinked
 bool YosysNetwork::isLinked() const { return open_epoch_hook_(); }
 
 // one stable token per object, write_sdc sorts by name
 std::string YosysNetwork::token(Handle handle) const
 {
-	size_t index = tokens_->try_emplace(handle, tokens_->size()).first->second;
-	return std::string(detail::token_prefix) + std::to_string(index);
+	auto [entry, fresh] = tokens_->try_emplace(handle, tokens_->size());
+	return std::string(detail::token_prefix) + std::to_string(entry->second);
 }
 
 std::string YosysNetwork::pathName(const sta::Instance *instance) const
@@ -138,6 +151,7 @@ std::string YosysNetwork::pathName(const sta::Pin *pin) const
 	return sta::Network::pathName(pin);
 }
 
+// in token mode, so write_sdc writes a hierarchical -through pin as itself
 bool YosysNetwork::isLeaf(const sta::Pin *pin) const { return tokens_ != nullptr || sta::Network::isLeaf(pin); }
 
 std::string YosysNetwork::pathName(const sta::Net *net) const
@@ -147,6 +161,7 @@ std::string YosysNetwork::pathName(const sta::Net *net) const
 	return sta::Network::pathName(net);
 }
 
+// count of wires that have the name of a constant net, linkView warns
 size_t YosysNetwork::link(std::unique_ptr<NetView> view)
 {
 	log_assert(!linked());
@@ -164,6 +179,7 @@ size_t YosysNetwork::link(std::unique_ptr<NetView> view)
 	return shared_names;
 }
 
+// epoch.cc calls it before each link and after a throw in sync or link
 void YosysNetwork::unlink()
 {
 	// the cells and ports outlive the link
@@ -223,11 +239,14 @@ size_t YosysNetwork::buildTables(Netlist::Instance *scope)
 	for (Netlist::Net *net : scope->nets) {
 		Handle &owner = names.nets[detail::staNetName(net)];
 		shared_names += owner.bits != 0;
-		if (owner.bits == 0 || net->constant != Netlist::Net::Const::None)
+		bool is_constant = net->constant != Netlist::Net::Const::None;
+		if (owner.bits == 0 || is_constant)
 			owner = handle(net);
-		bool one = net->constant == Netlist::Net::Const::One;
-		if (net->constant != Netlist::Net::Const::None)
-			addConstantNet(handle(net), one ? sta::LogicValue::one : sta::LogicValue::zero);
+		if (!is_constant)
+			continue;
+		bool is_one = net->constant == Netlist::Net::Const::One;
+		sta::LogicValue value = is_one ? sta::LogicValue::one : sta::LogicValue::zero;
+		addConstantNet(handle(net), value);
 	}
 	return shared_names;
 }
@@ -293,8 +312,11 @@ sta::ConcreteCell *YosysNetwork::makeShapedCell(const Netlist::Instance &inst)
 	sta::Cell *scell = makeCell(design_lib_, cell_name, inst.isLeaf(), "");
 	for (const Netlist::Port &shape : inst.type->ports) {
 		std::string port_name = detail::staName(shape.name);
-		bool scalar = shape.width == 1 && !shape.vector;
-		sta::Port *port = scalar ? makePort(scell, port_name) : makeBusPort(scell, port_name, shape.from, shape.to);
+		sta::Port *port = nullptr;
+		if (shape.width == 1 && !shape.vector)
+			port = makePort(scell, port_name);
+		else
+			port = makeBusPort(scell, port_name, shape.from, shape.to);
 		setDirection(port, detail::staDirection(shape.dir));
 	}
 	return reinterpret_cast<sta::ConcreteCell *>(scell);
@@ -305,11 +327,16 @@ const YosysNetwork::ScopeNames &YosysNetwork::scopeNames(const sta::Instance *in
 	return scope_names_[record(instance)->id];
 }
 
+// flat cells and nets by hdlname path, u1/r finds the cell u1.r, built at the first miss of a name with a divider
+// none when a child has the first name of the path, a real scope wins
 const YosysNetwork::ScopeNames &YosysNetwork::hierNames(const sta::Instance *instance, std::string_view name) const
 {
 	static const ScopeNames none;
 	size_t divider = name.find("\\/");
-	if (divider == std::string_view::npos || scopeNames(instance).children.contains(name.substr(0, divider)))
+	if (divider == std::string_view::npos)
+		return none;
+	std::string_view first_name = name.substr(0, divider);
+	if (scopeNames(instance).children.contains(first_name))
 		return none;
 	const Netlist::Instance *scope = record(instance);
 	auto [it, fresh] = hier_names_.try_emplace(scope->id);
@@ -328,12 +355,19 @@ const YosysNetwork::ScopeNames &YosysNetwork::hierNames(const sta::Instance *ins
 	return names;
 }
 
-sta::Instance *YosysNetwork::topInstance() const { return linked() ? handle(view_->top()) : Handle(); }
+sta::Instance *YosysNetwork::topInstance() const
+{
+	if (!linked())
+		return nullptr;
+	return handle(view_->top());
+}
 
 std::string YosysNetwork::name(const sta::Instance *instance) const
 {
 	const Netlist::Instance *inst = record(instance);
-	return inst->isTop() ? inst->name : detail::staName(inst->name);
+	if (inst->isTop())
+		return inst->name;
+	return detail::staName(inst->name);
 }
 
 sta::ObjectId YosysNetwork::id(const sta::Instance *instance) const { return record(instance)->id; }
@@ -353,14 +387,13 @@ bool YosysNetwork::isLeaf(const sta::Instance *instance) const { return record(i
 
 sta::Instance *YosysNetwork::findChild(const sta::Instance *parent, std::string_view name) const
 {
-	Handle child = detail::lookup(scopeNames(parent).children, name);
+	Handle child = detail::valueOrEmpty(scopeNames(parent).children, name);
 	if (child.bits == 0)
-		child = detail::lookup(hierNames(parent, name).children, name);
+		child = detail::valueOrEmpty(hierNames(parent, name).children, name);
 	return child;
 }
 
-void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern,
-                                        sta::InstanceSeq &matches) const
+void YosysNetwork::findChildrenMatching(const sta::Instance *parent, const sta::PatternMatch *pattern, sta::InstanceSeq &matches) const
 {
 	if (!pattern->hasWildcards())
 		sta::Network::findChildrenMatching(parent, pattern, matches);
@@ -391,7 +424,8 @@ sta::InstanceChildIterator *YosysNetwork::childIterator(const sta::Instance *ins
 
 sta::InstancePinIterator *YosysNetwork::pinIterator(const sta::Instance *instance) const
 {
-	std::vector<Netlist::Pin *> pins = record(instance)->pins;
+	const std::vector<Netlist::Pin *> &inst_pins = record(instance)->pins;
+	Netlist::PinList pins(inst_pins.begin(), inst_pins.end());
 	detail::reversePortRuns(pins);
 	return new detail::SeqIterator<sta::Pin *>(handles(pins));
 }
@@ -420,7 +454,8 @@ sta::Port *YosysNetwork::port(const sta::Pin *pin) const
 {
 	const Netlist::Pin *bit_pin = record(pin);
 	const StaCell &entry = cells_.at(bit_pin->inst->type);
-	return reinterpret_cast<sta::Port *>(entry.bit_ports[bit_pin->port().first_pin + bit_pin->bit]);
+	size_t position = bit_pin->port().first_pin + bit_pin->bit;
+	return reinterpret_cast<sta::Port *>(entry.bit_ports[position]);
 }
 
 sta::PortDirection *YosysNetwork::direction(const sta::Pin *pin) const { return direction(port(pin)); }
@@ -447,16 +482,16 @@ sta::ObjectId YosysNetwork::id(const sta::Net *net) const
 	return net != nullptr ? record(net)->id : sta::object_id_null;
 }
 
+// a constant net wins its name
 sta::Net *YosysNetwork::findNet(const sta::Instance *instance, std::string_view net_name) const
 {
-	Handle net = detail::lookup(scopeNames(instance).nets, net_name);
+	Handle net = detail::valueOrEmpty(scopeNames(instance).nets, net_name);
 	if (net.bits == 0)
-		net = detail::lookup(hierNames(instance, net_name).nets, net_name);
+		net = detail::valueOrEmpty(hierNames(instance, net_name).nets, net_name);
 	return net;
 }
 
-void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern,
-                                        sta::NetSeq &matches) const
+void YosysNetwork::findInstNetsMatching(const sta::Instance *instance, const sta::PatternMatch *pattern, sta::NetSeq &matches) const
 {
 	if (!pattern->hasWildcards()) {
 		if (sta::Net *net = findNet(instance, pattern->pattern()); net != nullptr)
@@ -478,7 +513,7 @@ sta::Instance *YosysNetwork::instance(const sta::Net *net) const
 sta::NetPinIterator *YosysNetwork::pinIterator(const sta::Net *net) const
 {
 	const std::vector<Netlist::Pin *> &pins = record(net)->pins;
-	std::vector<Netlist::Pin *> seq(pins.rbegin(), pins.rend());
+	Netlist::PinList seq(pins.rbegin(), pins.rend());
 	detail::reversePortRuns(seq);
 	return new detail::SeqIterator<const sta::Pin *>(handles(seq));
 }
@@ -486,7 +521,7 @@ sta::NetPinIterator *YosysNetwork::pinIterator(const sta::Net *net) const
 sta::NetTermIterator *YosysNetwork::termIterator(const sta::Net *net) const
 {
 	const std::vector<Netlist::Pin *> &ports = record(net)->boundary;
-	std::vector<Netlist::Pin *> reversed_ports(ports.rbegin(), ports.rend());
+	Netlist::PinList reversed_ports(ports.rbegin(), ports.rend());
 	return new detail::SeqIterator<sta::Term *>(handles(reversed_ports, Handle::Kind::Term));
 }
 

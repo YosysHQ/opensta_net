@@ -1,4 +1,4 @@
-// the Tcl commands of the sync apply, see ::ysta::run and ::ysta::apply in trace.tcl
+// Tcl commands of the sync apply, see ::ysta::run and ::ysta::apply in trace.tcl
 #include "opensta_net.h"
 
 #include "sta/Graph.hh"
@@ -9,12 +9,13 @@ USING_YOSYS_NAMESPACE
 
 namespace opensta_net {
 
+// objects of a token word, an error when it finds none
 int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 1, 2, "word ?wire_as?"))
 		return TCL_ERROR;
-	static const char *const names[] = {"none", "pins", "driven", "edges", nullptr}; // in the order of WireAs
-	int index = 0; // none without the word
+	static const char *const names[] = {"none", "pins", "driven", "edges", nullptr}; // WireAs order
+	int index = int(WireAs::None);
 	if (objc == 3 && Tcl_GetIndexFromObj(interp, objv[2], names, "wire_as", TCL_EXACT, &index) != TCL_OK)
 		return TCL_ERROR;
 	WireAs wire_as = WireAs(index);
@@ -26,7 +27,7 @@ int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 			Tcl_ListObjAppendElement(interp, objects, Tcl_NewStringObj(item.c_str(), -1));
 			continue;
 		}
-		// a cell that is a wire now has nothing that the command can be on
+		// a cell that is a wire now gives the command no object
 		is_wire = is_wire || (ref->isWire() && wire_as != WireAs::Driven);
 		appendFound(*ref, wire_as, objects);
 	}
@@ -34,6 +35,7 @@ int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 	return foundOrLost(interp, objects, is_wire);
 }
 
+// call after the result is set, a loss puts its Tcl error there
 int foundOrLost(Tcl_Interp *interp, Tcl_Obj *objects, bool empty_is_vacuous)
 {
 	int count = 0;
@@ -50,6 +52,7 @@ int foundOrLost(Tcl_Interp *interp, Tcl_Obj *objects, bool empty_is_vacuous)
 	return TCL_ERROR;
 }
 
+// min_args and max_args count words after the command name
 bool wrongArgCount(Tcl_Interp *interp, int objc, Tcl_Obj *const objv[], int min_args, int max_args, const char *usage)
 {
 	if (objc > min_args && objc <= max_args + 1)
@@ -65,8 +68,10 @@ void appendFound(const SdcObjectRef &ref, WireAs wire_as, Tcl_Obj *objects)
 		std::erase_if(found, hasNoWireDriver);
 	if (found.empty() && (!ref.isWire() || wire_as == WireAs::Driven))
 		the_sta->loss.missing += " " + ref.name;
-	bool on_leaf_pins = ref.kind == SdcObjectRef::Kind::Pin && !ref.pins.empty() && ref.pins[0]->inst->isLeaf();
-	the_sta->loss.changed = the_sta->loss.changed || (ref.was_hier && on_leaf_pins && wire_as == WireAs::None);
+	bool has_pin = ref.kind == SdcObjectRef::Kind::Pin && !ref.pins.empty();
+	bool on_leaf_pins = has_pin && ref.pins[0]->inst->isLeaf();
+	bool is_changed_form = ref.was_hier && on_leaf_pins && wire_as == WireAs::None;
+	the_sta->loss.changed = the_sta->loss.changed || is_changed_form;
 	if (!ref.isWire() || wire_as != WireAs::Edges) {
 		handleList(found, objects);
 		return;
@@ -94,6 +99,7 @@ int vacuous(Tcl_Interp *interp)
 	return TCL_ERROR;
 }
 
+// port name now, "" when its pins are not on one cell
 std::string arcPort(const SdcObjectRef &ref, const std::string &port)
 {
 	bool has_cut = ref.gone;
@@ -107,12 +113,15 @@ std::string arcPort(const SdcObjectRef &ref, const std::string &port)
 	return has_cut ? "" : port;
 }
 
+// pins at the cut side of one port, of each port of the side when port is ""
 Handles cutPins(const SdcObjectRef &ref, PortSide side, const std::string &port)
 {
 	Handles found;
 	for (const auto &[name, is_output, pins] : ref.port_cuts) {
 		Handles cut = staNetwork().handles(pins);
-		if (is_output == (side == PortSide::Outputs) && (port.empty() || name == port))
+		bool on_side = is_output == (side == PortSide::Outputs);
+		bool is_wanted_port = port.empty() || name == port;
+		if (on_side && is_wanted_port)
 			found.insert(found.end(), cut.begin(), cut.end());
 	}
 	return found;
@@ -139,12 +148,14 @@ std::vector<sta::Edge *> edgesAt(const sta::Pin *pin, Direction direction)
 void appendEdges(Tcl_Obj *list, const sta::Pin *from, const sta::Pin *to)
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
-	std::string from_handle = objectHandle(ysta::Handle(from)), to_handle = objectHandle(ysta::Handle(to));
+	std::string from_handle = objectHandle(ysta::Handle(from));
+	std::string to_handle = objectHandle(ysta::Handle(to));
 	std::string get_edges = "::get_timing_edges -from " + from_handle + " -to " + to_handle;
 	if (Tcl_EvalEx(interp, get_edges.c_str(), -1, TCL_EVAL_GLOBAL) == TCL_OK)
 		Tcl_ListObjAppendList(nullptr, list, Tcl_GetObjResult(interp));
 }
 
+// a pin disable does not cut paths that end at the pin
 void appendWireEdges(Tcl_Obj *list, const sta::Pin *pin)
 {
 	sta::Graph *graph = the_sta->ensureGraph();
@@ -155,16 +166,18 @@ void appendWireEdges(Tcl_Obj *list, const sta::Pin *pin)
 	}
 }
 
+// a check arc is the check edges from what -from reaches to what -to reaches
+// false when another port also reaches the clock or the checked pin of one
 bool appendCheckEdges(ArcCut &arc)
 {
-	// the reach ends at the outputs of the old cell
+	// reach ends at the outputs of the old cell
 	PinSet from_reach, to_reach;
 	for (ysta::Handle pin : arc.from_pins)
 		reachMask(pin, Direction::Forward, ReachNothing, {}, arc.outputs, from_reach);
 	for (ysta::Handle pin : arc.to_pins)
 		reachMask(pin, Direction::Forward, ReachNothing, {}, arc.outputs, to_reach);
 	sta::Graph *graph = the_sta->ensureGraph();
-	std::set<std::pair<const sta::Pin *, const sta::Pin *>> checks;
+	std::set<CheckPins> checks;
 	for (const sta::Pin *pin : from_reach) {
 		for (sta::Edge *edge : edgesAt(pin, Direction::Forward)) {
 			const sta::Pin *checked = edge->to(graph)->pin();
@@ -181,6 +194,8 @@ bool appendCheckEdges(ArcCut &arc)
 	return exact;
 }
 
+// edges that stand for an arc of a gone cell, they have just the arc paths
+// false when an arc path has no such edge, the command is then lost
 bool appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &from, const std::string &to)
 {
 	PortSide to_side = PortSide::Outputs;
@@ -188,9 +203,19 @@ bool appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &f
 		if (!is_output && port == to)
 			to_side = PortSide::Inputs; // a check arc
 	}
-	ArcCut arc = {.from_pins = cutPins(ref, PortSide::Inputs, from), .inputs = cutPins(ref, PortSide::Inputs, ""),
-	              .to_pins = cutPins(ref, to_side, to), .outputs = cutPins(ref, PortSide::Outputs, ""),
-	              .check_reach = to.empty() ? ReachTarget : ReachOtherEnd, .edges = list};
+	ReachMask check_reach = to.empty() ? ReachTarget : ReachOtherEnd;
+	Handles from_pins = cutPins(ref, PortSide::Inputs, from);
+	Handles inputs = cutPins(ref, PortSide::Inputs, "");
+	Handles to_pins = cutPins(ref, to_side, to);
+	Handles outputs = cutPins(ref, PortSide::Outputs, "");
+	ArcCut arc = {
+		.from_pins = from_pins,
+		.inputs = inputs,
+		.to_pins = to_pins,
+		.outputs = outputs,
+		.check_reach = check_reach,
+		.edges = list,
+	};
 	if (to_side == PortSide::Inputs)
 		return appendCheckEdges(arc);
 	for (ysta::Handle pin : arc.from_pins)
@@ -198,12 +223,14 @@ bool appendArcEdges(Tcl_Obj *list, const SdcObjectRef &ref, const std::string &f
 	return arc.exact;
 }
 
+// no path into the pin comes from an end that is no target
 bool reachesOnly(const sta::Pin *pin, const Handles &targets, const Handles &ends)
 {
 	PinSet seen;
 	return reachMask(pin, Direction::Backward, ReachNothing, targets, ends, seen) == ReachTarget;
 }
 
+// cuts the arc paths through the pin, by its wire edges when it has just such paths, else after it
 void cutArcPaths(ArcCut &arc, const sta::Pin *pin)
 {
 	if (!arc.exact || !arc.seen.insert(pin).second)
@@ -216,7 +243,7 @@ void cutArcPaths(ArcCut &arc, const sta::Pin *pin)
 		appendWireEdges(arc.edges, pin);
 		return;
 	}
-	// the paths of the arc end at a pin of -to or at a check with other paths, no pin there has just them
+	// arc paths end at a -to pin or at a check with other paths, no pin there has just them
 	std::vector<sta::Edge *> edges = edgesAt(pin, Direction::Forward);
 	bool has_check = std::ranges::any_of(edges, &sta::TimingRole::isTimingCheck, &sta::Edge::role);
 	bool at_to_pin = std::ranges::count(arc.to_pins, ysta::Handle(pin)) != 0;
@@ -228,6 +255,7 @@ void cutArcPaths(ArcCut &arc, const sta::Pin *pin)
 	}
 }
 
+// what the pin reaches in the new logic, a target or another end, a timing check counts as check_reach
 ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_reach, const Handles &targets,
                     const Handles &ends, PinSet &seen)
 {
@@ -249,19 +277,22 @@ ReachMask reachMask(const sta::Pin *pin, Direction direction, ReachMask check_re
 		mask |= reachMask(next->pin(), direction, check_reach, targets, ends, seen);
 		has_arc = true;
 	}
-	// a path that ends in the new logic is not a path of the arc
+	// a path that ends in the new logic is no arc path
 	if (direction == Direction::Forward && !has_arc)
 		mask |= ReachOtherEnd;
 	return mask;
 }
 
+// words of an arc disable on the new network
+// a found cell has the port names a pass gave, ports not on one cell give the edges of appendArcEdges
 int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 2, 2, "cell_word options"))
 		return TCL_ERROR;
-	SdcObjectRef *ref = tokenRef(Tcl_GetString(objv[1]));
+	const char *cell_word = Tcl_GetString(objv[1]);
+	SdcObjectRef *ref = tokenRef(cell_word);
 	if (ref == nullptr || ref->kind != SdcObjectRef::Kind::Instance) {
-		Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s is no cell of the last capture", Tcl_GetString(objv[1])));
+		Tcl_SetObjResult(interp, Tcl_ObjPrintf("%s is no cell of the last capture", cell_word));
 		return TCL_ERROR;
 	}
 	std::string from, to;
@@ -286,6 +317,7 @@ int tclMovedArc(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 	return TCL_ERROR;
 }
 
+// appends each option with its port now, from and to get the old ports, false when a port is not on one cell
 bool arcWords(const SdcObjectRef &ref, const std::vector<std::string> &options, std::string &from, std::string &to,
               Tcl_Obj *words)
 {
@@ -307,7 +339,9 @@ bool arcWords(const SdcObjectRef &ref, const std::vector<std::string> &options, 
 bool isPathEnd(const sta::Pin *pin, PathSide side)
 {
 	const sta::Sdc *sdc = the_sta->cmdSdc();
-	return side == PathSide::Start ? sdc->isExceptionStartpoint(pin) : sdc->isExceptionEndpoint(pin);
+	if (side == PathSide::Start)
+		return sdc->isExceptionStartpoint(pin);
+	return sdc->isExceptionEndpoint(pin);
 }
 
 void addPathEnds(const sta::Pin *pin, Handles &ends)
@@ -323,6 +357,7 @@ void addPathEnds(const sta::Pin *pin, Handles &ends)
 	}
 }
 
+// adds the first starts after the pin, those an inverting arc clocks go to inverted_starts
 void addStartsBehind(const sta::Pin *pin, Polarity polarity, MovedEnds &found, SeenStarts &seen)
 {
 	if (!seen.insert({pin, polarity}).second)
@@ -339,13 +374,16 @@ void addStartsBehind(const sta::Pin *pin, Polarity polarity, MovedEnds &found, S
 			continue;
 		const sta::Pin *to = edge->to(the_sta->graph())->pin();
 		// an arc with no one sense gives both edges
-		if (edge->isWire() || edge->sense() != sta::TimingSense::negative_unate)
+		bool can_keep_polarity = edge->isWire() || edge->sense() != sta::TimingSense::negative_unate;
+		bool can_flip_polarity = !edge->isWire() && edge->sense() != sta::TimingSense::positive_unate;
+		if (can_keep_polarity)
 			addStartsBehind(to, polarity, found, seen);
-		if (!edge->isWire() && edge->sense() != sta::TimingSense::positive_unate)
+		if (can_flip_polarity)
 			addStartsBehind(to, flipped, found, seen);
 	}
 }
 
+// MovedEnds lists for ::ysta::moved_end_words, vacuous when only moved has objects
 int tclMovedEnds(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 2, 2, "option word"))
@@ -363,8 +401,11 @@ int tclMovedEnds(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]
 	}
 	int kept_count = 0;
 	Tcl_ListObjLength(interp, found.kept, &kept_count);
-	Tcl_Obj *result_lists[] = {found.kept, handleList(found.moved), handleList(found.ends), handleList(found.starts),
-	                           handleList(found.inverted_starts)};
+	Tcl_Obj *moved = handleList(found.moved);
+	Tcl_Obj *ends = handleList(found.ends);
+	Tcl_Obj *starts = handleList(found.starts);
+	Tcl_Obj *inverted_starts = handleList(found.inverted_starts);
+	Tcl_Obj *result_lists[] = {found.kept, moved, ends, starts, inverted_starts};
 	Tcl_SetObjResult(interp, Tcl_NewListObj(std::size(result_lists), result_lists));
 	bool has_new_ends = !found.ends.empty() || !found.starts.empty() || !found.inverted_starts.empty();
 	if (!found.moved.empty() && kept_count == 0 && !has_new_ends)
@@ -376,7 +417,8 @@ void addMovedEnds(const SdcObjectRef &ref, PathSide side, MovedEnds &found, Seen
 {
 	bool was_end = side == PathSide::Start ? ref.was_start : ref.was_end;
 	for (ysta::Handle handle : ref.objects()) {
-		if (ref.kind != SdcObjectRef::Kind::Pin || !was_end || isPathEnd(handle, side)) {
+		bool is_moved_end = ref.kind == SdcObjectRef::Kind::Pin && was_end && !isPathEnd(handle, side);
+		if (!is_moved_end) {
 			handleList({handle}, found.kept);
 			continue;
 		}
@@ -388,14 +430,17 @@ void addMovedEnds(const SdcObjectRef &ref, PathSide side, MovedEnds &found, Seen
 	}
 }
 
+// the sync command goes on without the named object
 int tclMissing(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 1, 1, "name"))
 		return TCL_ERROR;
-	the_sta->loss.missing += std::string(" ") + Tcl_GetString(objv[1]);
+	std::string name = Tcl_GetString(objv[1]);
+	the_sta->loss.missing += " " + name;
 	return TCL_OK;
 }
 
+// logs a lost or changed command, result 1 for such a command
 int tclLoss(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 3, 3, "failed error script"))
@@ -421,18 +466,23 @@ std::string lossReason(const CommandLoss &loss, bool failed, const std::string &
 		return "";
 	if (failed)
 		return "failed: " + error;
-	if (loss.missing.empty())
-		return loss.changed ? "applied on the leaf pins" : "";
-	return "applied without" + loss.missing;
+	if (!loss.missing.empty())
+		return "applied without" + loss.missing;
+	if (loss.changed)
+		return "applied on the leaf pins";
+	return "";
 }
 
+// count of lost or changed commands, clocks and library objects apply by name
 int resolveAndApply()
 {
 	Tcl_Interp *interp = yosys_get_tcl_interp();
 	the_sta->loss = {};
 	the_sta->tracker.resolve(staNetwork().view(), trackedRefs());
 	int lost = 0;
-	if (!tclEval("::ysta::apply") || Tcl_GetIntFromObj(interp, Tcl_GetObjResult(interp), &lost) != TCL_OK)
+	bool applied = tclEval("::ysta::apply");
+	bool has_count = applied && Tcl_GetIntFromObj(interp, Tcl_GetObjResult(interp), &lost) == TCL_OK;
+	if (!has_count)
 		log_cmd_error("opensta_net: sync: %s\n", Tcl_GetStringResult(interp));
 	return lost;
 }

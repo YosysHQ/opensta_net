@@ -1,31 +1,405 @@
-# Tcl side of opensta_net: guards, the constraint journal, apply helpers
+# Tcl side of opensta_net, journals the constraint commands and applies them again after a rebuild
+namespace eval ::ysta::sdc {}
+namespace eval ::ysta::byname { namespace path ::ysta::sdc }
 namespace eval ::ysta {
+	# {mode cmd} that succeeded since the last capture
 	variable journal {}
+	# stack, a query in a command can sync and run commands
+	variable entered {}
+	# {{mode family} cmd} that write_sdc omits, a capture adds them
 	variable kept {}
-	variable kept_families {}
+	# {mode script} of the last capture, objects are tokens
+	variable captured {}
+	# {mode script} of uncaptured journal commands, objects are name getters
+	variable replay {}
+	# {mode pin} of hierarchical pin disables, write_sdc omits them
 	variable hier_disables {}
-	# not written by write_sdc
-	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
-		set_wire_load_selection_group set_pvt set_power_activity set_property
-		set_assigned_delay set_assigned_check set_assigned_transition}
-	variable unwritten_options {-network_latency_included -source_latency_included -probe -subtract_pin_load}
-	# a kept command keeps the later ones of its family
+	# from 1 on old clock handles and stale nets exist
+	variable rebuilds 0
+	# clock and edge handles that a getter gave since the last rebuild, see note_handles
+	variable live_handles
+	# linked to C++, while set old nets get a stale name
+	variable writing_sdc
+
+	# a kept command keeps the later ones of its family, so the order stays
 	variable families {
-		set_input_delay in unset_input_delay in
-		set_output_delay out unset_output_delay out
-		set_max_delay path set_min_delay path unset_path_exceptions path
-		set_load load
-		set_disable_timing disable unset_disable_timing disable
+		set_input_delay in unset_input_delay in set_output_delay out unset_output_delay out
+		set_max_delay path set_min_delay path unset_path_exceptions path set_load load
 		set_power_activity power unset_power_activity power
 		set_disable_inferred_clock_gating icg unset_disable_inferred_clock_gating icg
 	}
-	# set_property on these is kept
-	variable property_types {Pin Instance Net Clock Port}
+	variable unwritten_cmds {set_clock_gating_check set_disable_inferred_clock_gating set_wire_load_model
+		set_wire_load_selection_group set_pvt set_power_activity
+		set_assigned_delay set_assigned_check set_assigned_transition}
+	variable unwritten_options {
+		set_input_delay {-network_latency_included -source_latency_included}
+		set_output_delay {-network_latency_included -source_latency_included}
+		set_max_delay -probe set_min_delay -probe set_load -subtract_pin_load
+	}
+	variable path_cmds {set_false_path set_multicycle_path set_max_delay set_min_delay set_path_margin group_path}
+	variable path_end_options {-from -to -rise_from -fall_from -rise_to -fall_to}
+	# wire_as per command, see WireAs in constraints.h
+	variable wire_as_by_cmd {
+		set_disable_timing edges set_case_analysis driven set_logic_zero driven set_logic_one driven
+		set_logic_dc driven create_clock pins create_generated_clock pins set_clock_latency pins
+	}
 }
 
-# Guards
+proc ::ysta::mode_exists {mode} { ::sta::is_object [::sta::find_mode $mode] }
 
-# skip an empty first argument, opensta crashes on it
+# a command can delete a clock, so a journal command has no clock handle, only a getter by name
+proc ::ysta::enter {cmd op} {
+	foreach clock [regexp -all -inline {\m_[0-9a-f]+_p_Clock\M} $cmd] {
+		set cmd [string map [list $clock [list "\[get_clocks [list [get_name $clock]]\]"]] $cmd]
+	}
+	lappend ::ysta::entered $cmd
+}
+proc ::ysta::record {cmd code result op} {
+	set named [lindex $::ysta::entered end]
+	set ::ysta::entered [lrange $::ysta::entered 0 end-1]
+	if {$code != 0} return
+	lappend ::ysta::journal [list [::sta::cmd_mode_name] $named]
+	keep [namespace tail [lindex $cmd 0]] $cmd $named
+}
+proc ::ysta::keep {name cmd named} {
+	set family [list [::sta::cmd_mode_name]]
+	if {[dict exists $::ysta::families $name]} { lappend family [dict get $::ysta::families $name] }
+	set family_is_kept [expr {[llength $family] == 2 && [lsearch -exact -index 0 $::ysta::kept $family] >= 0}]
+	if {!$family_is_kept && ![unwritten $name $cmd]} return
+	lappend ::ysta::kept [list $family [activity_as_density [lreplace $named 0 0 $name]]]
+}
+proc ::ysta::unwritten {name cmd} {
+	# a rebuild drops the set_property of these objects, so we keep it
+	if {$name eq "set_property"} {
+		# no object gives an empty type
+		return [expr {[::sta::object_type [lindex $cmd 1]] in {Pin Instance Net Clock Port}}]
+	}
+	if {$name in $::ysta::unwritten_cmds} { return 1 }
+	if {![dict exists $::ysta::unwritten_options $name]} { return 0 }
+	# OpenSTA takes a prefix of an option, same match as its parse_key_args
+	set options [dict get $::ysta::unwritten_options $name]
+	foreach word $cmd {
+		if {[::sta::is_keyword_arg $word] && [lsearch -glob $options $word*] >= 0} { return 1 }
+	}
+	return 0
+}
+# OpenSTA divides -activity by the min clock period of now, a later run would take another period
+proc ::ysta::activity_as_density {cmd} {
+	set at [lsearch -exact $cmd -activity]
+	if {[lindex $cmd 0] ne "set_power_activity" || $at < 0} { return $cmd }
+	set period [::sta::time_sta_ui [::sta::clock_min_period [::sta::cmd_mode_name]]]
+	set cmd [lreplace $cmd $at $at+1 -density [expr {[lindex $cmd $at+1] / $period}]]
+	set at [lsearch -exact $cmd -clock]
+	if {$at >= 0} { set cmd [lreplace $cmd $at $at+1] }
+	return $cmd
+}
+# remove_delay_slew_annotations undoes the set_assigned_* commands, also in the last capture and the journal
+proc ::ysta::drop_assigned {args} {
+	foreach name {kept captured journal replay} {
+		set ::ysta::$name [lsearch -all -inline -not -regexp -index 1 [set ::ysta::$name] {^(::)?(sta::)?set_assigned_}]
+	}
+}
+trace add execution ::sta::remove_delay_slew_annotations leave ::ysta::drop_assigned
+
+# OpenSTA keeps a hierarchical pin disable as wire edges of its leaf pins, so we undo it while its pins live
+proc ::ysta::record_hier_disable {cmd code result op} {
+	set pin [lindex $cmd 1]
+	if {$code != 0 || ![$pin is_hierarchical]} return
+	set item [list [::sta::cmd_mode_name] $pin]
+	set disables [lsearch -all -inline -exact -not $::ysta::hier_disables $item]
+	if {[namespace tail [lindex $cmd 0]] eq "disable_pin"} { lappend disables $item }
+	set ::ysta::hier_disables $disables
+}
+foreach cmd {disable_pin unset_disable_pin} { trace add execution ::sta::$cmd leave ::ysta::record_hier_disable }
+proc ::ysta::undo_hier_disables {} {
+	set scene [::sta::cmd_scene]
+	set cmd_mode [::sta::cmd_mode_name]
+	foreach item $::ysta::hier_disables {
+		lassign $item mode pin
+		# a deleted mode took its disables along
+		if {![mode_exists $mode]} continue
+		::sta::set_cmd_mode $mode
+		# the pin of an unlinked network is gone with its edges
+		catch {::sta::unset_disable_pin $pin}
+	}
+	set ::ysta::hier_disables {}
+	::sta::set_cmd_scene $scene
+	::sta::set_cmd_mode $cmd_mode
+}
+proc ::ysta::clear {} {
+	undo_hier_disables
+	array unset ::ysta::live_handles
+	foreach name {journal kept replay captured} { set ::ysta::$name {} }
+}
+
+proc ::ysta::split_commands {text} {
+	set commands {}
+	set script {}
+	foreach line [split $text \n] {
+		append script $line \n
+		if {[string index $line end] eq "\\" || ![info complete $script]} continue
+		if {![regexp {^\s*(#|$)} $script]} { lappend commands $script }
+		set script {}
+	}
+	# an incomplete command stays, its evaluation reports the error
+	if {[string trim $script] ne {}} { lappend commands $script }
+	return $commands
+}
+# write_sdc writes -name raw as the first option, we brace it up to the next one
+proc ::ysta::braced_name {script} {
+	# joined first, else a line continuation after the name gets into the braces
+	set script [string trim [string map {"\\\n" " "} $script]]
+	if {![regexp -indices {^\S+ -name } $script head]} { return $script }
+	set from [expr {[lindex $head 1] + 1}]
+	set to [string length $script]
+	if {[regexp -indices -start $from {\s+[-\[]} $script next]} { set to [lindex $next 0] }
+	return [string replace $script $from $to-1 [list [string range $script $from $to-1]]]
+}
+proc ::ysta::written_scripts {mode} {
+	close [file tempfile path]
+	try {
+		write_sdc -no_timestamp -mode $mode $path
+		set file [open $path]
+		fconfigure $file -encoding utf-8
+		set scripts [lmap script [split_commands [read $file]] { braced_name $script }]
+	} finally {
+		catch {close $file}
+		file delete $path
+	}
+	# write_sdc sorts by name and a new object takes the next token number, so the disables stay after its scripts
+	foreach item [lsearch -all -inline -exact -index 0 $::ysta::hier_disables $mode] {
+		lappend scripts "set_disable_timing \[get_pins {[get_full_name [lindex $item 1]]}\]"
+	}
+	return $scripts
+}
+# the higher the tighter
+proc ::ysta::tightness {script} {
+	set signs {set_min_delay 1 set_max_delay -1 set_multicycle_path -1}
+	if {![regexp {\S+} $script name] || ![dict exists $signs $name]} return
+	# the value is the last word before -comment
+	set value [lindex [regexp -all -inline {\S+} [regsub {\s+-comment\s+(\{.*\}|\S+)$} $script {}]] end]
+	if {![string is double -strict $value]} return
+	expr {[dict get $signs $name] * $value}
+}
+# OpenSTA takes the later path exception on a shared path, so the tightest goes last
+proc ::ysta::tightest_last {commands} {
+	set places {}
+	set by_tightness {}
+	for {set at 0} {$at < [llength $commands]} {incr at} {
+		set tightness [tightness [lindex $commands $at 1]]
+		if {$tightness eq {}} continue
+		lappend places $at
+		lappend by_tightness [list $tightness [lindex $commands $at]]
+	}
+	foreach place $places sorted [lsort -real -index 0 $by_tightness] { lset commands $place [lindex $sorted 1] }
+	return $commands
+}
+# an error keeps the last capture and the journal, the sync then runs the journal by name
+proc ::ysta::capture {args} {
+	set written {}
+	foreach mode $args {
+		foreach script [written_scripts $mode] { lappend written [list $mode $script] }
+	}
+	set written [tightest_last $written]
+	# a kept unset_path_exceptions must not remove a written exception, only these run after the kept commands
+	set late {}
+	set exceptions {^(set_false_path|set_multicycle_path|set_path_margin|group_path)\M}
+	if {[lsearch -glob -index 1 $::ysta::kept unset_path_exceptions*] >= 0} {
+		set late [lsearch -all -inline -regexp -index 1 $written $exceptions]
+		set written [lsearch -all -inline -not -regexp -index 1 $written $exceptions]
+	}
+	# a kept command runs after the written ones, so the apply keeps only it again
+	# named gives out token numbers too, so it stays after written_scripts
+	set kept {}
+	foreach item $::ysta::kept {
+		set mode [lindex $item 0 0]
+		if {$mode in $args} { lappend kept [list $mode [named [lindex $item 1]]] }
+	}
+	set ::ysta::captured [list {*}$written {*}$kept {*}$late]
+	set ::ysta::journal {}
+}
+
+# get_full_name of a pin, a cell, a net or a top port gives a token in a capture
+proc ::ysta::object_word {object getters} {
+	set name [list [get_full_name $object]]
+	set type [::sta::object_type $object]
+	if {![dict exists $getters $type]} { set type other }
+	if {![dict exists $getters $type]} { return $name }
+	return "\[[dict get $getters $type] $name\]"
+}
+proc ::ysta::names {word getters} {
+	# a clock getter of enter stays
+	if {[string match {\[get_clocks *\]} $word]} { return [list $word] }
+	if {[::sta::is_object $word]} { return [list [object_word $word $getters]] }
+	if {[catch {llength $word}] || [lindex $word 0] eq $word} return
+	set words {}
+	set has_object 0
+	foreach item $word {
+		set names [names $item $getters]
+		if {$names ne {}} { set has_object 1 }
+		if {$names eq {}} { set names [list [list $item]] }
+		lappend words {*}$names
+	}
+	if {$has_object} { return $words }
+}
+proc ::ysta::named {cmd {getters {Clock get_clocks}}} {
+	if {[catch {llength $cmd}]} { return $cmd }
+	lset cmd 0 [namespace tail [lindex $cmd 0]]
+	set script {}
+	foreach word $cmd {
+		set names [names $word $getters]
+		switch [llength $names] {
+			0 { lappend script [list $word] }
+			1 { lappend script [lindex $names 0] }
+			default { lappend script "\[list [join $names]\]" }
+		}
+	}
+	join $script
+}
+# runs before the link, while a handle still gives its name
+proc ::ysta::name_journal {} {
+	# the link frees the clocks and edges also when it fails
+	array unset ::ysta::live_handles
+	set getters {
+		Clock get_clocks Pin get_pins Instance get_cells Net get_nets Port get_ports
+		LibertyCell get_lib_cells LibertyLibrary get_libs other ::ysta::missing
+	}
+	foreach item $::ysta::journal {
+		lappend ::ysta::replay [list [lindex $item 0] [named [lindex $item 1] $getters]]
+	}
+	set ::ysta::journal {}
+}
+# a getter of a journal script takes the exact name with no wildcards, a name with no object is missing
+proc ::ysta::exact {finder name} {
+	set object [$finder $name]
+	if {$object ne "NULL"} { return [list $object] }
+	missing $name
+}
+proc ::ysta::find_port {name} { [[::sta::top_instance] cell] find_port $name }
+foreach {getter finder} {
+	get_pins ::sta::find_pin get_cells ::sta::find_instance get_nets ::sta::find_net get_ports ::ysta::find_port
+} { interp alias {} ::ysta::byname::$getter {} ::ysta::exact $finder }
+
+# a getter of a captured script gives its tokens back, ::ysta::run resolves them
+foreach getter {get_pins get_cells get_nets get_ports} { interp alias {} ::ysta::sdc::$getter {} ::ysta::sdc::list }
+# write_sdc joins getters with list
+proc ::ysta::sdc::list {args} { concat {*}$args }
+# write_sdc writes a clock name raw in braces, find_clock takes the exact name, a list goes on without a lost clock
+proc ::ysta::sdc::get_clocks {name} { ::ysta::exact ::sta::find_clock $name }
+# write_sdc starts with current_design top, the design stays
+proc ::ysta::sdc::current_design {args} {}
+# the word of tokens resolves again for each pin, so a lost object is in the loss text once per pin
+proc ::ysta::edges_between {froms tos} {
+	set edges {}
+	foreach from $froms {
+		foreach to [resolve $tos] { lappend edges {*}[::get_timing_edges -from $from -to $to] }
+	}
+	return $edges
+}
+# write_sdc writes an edge disable as -from pin -to pin
+proc ::ysta::sdc::get_timing_edges {from_flag froms to_flag tos} {
+	set edges [::ysta::edges_between [::ysta::resolve $froms] $tos]
+	# a start behind new clock logic, the edges of the starts that it clocks
+	if {$edges eq {}} {
+		set starts [get_fanout -from [::ysta::resolve $froms] -flat -endpoints_only -trace_arcs all]
+		set edges [::ysta::edges_between $starts $tos]
+	}
+	if {$edges eq {}} { error "no timing edge between the pins" }
+	return $edges
+}
+# the leaf pins of a dissolved pin or net keep its paths, clock, value and edges, another use is reported
+proc ::ysta::wire_as {cmd option} {
+	if {[dict exists $::ysta::wire_as_by_cmd $cmd]} { return [dict get $::ysta::wire_as_by_cmd $cmd] }
+	if {[string match *through $option] || $option eq "-reference_pin"} { return pins }
+	return none
+}
+# an option with a pin behind new logic becomes one list of words per command to run
+#   -to P      -> -through P -to the path ends after P, the paths stay the same
+#   -from P    -> -from the starts that P clocks
+#   -rise_from -> the starts behind inverting logic get -fall_from
+proc ::ysta::moved_end_words {option word} {
+	lassign [moved_ends $option $word] kept moved ends starts inverted_starts
+	if {$moved eq {}} return
+	lappend kept {*}$starts
+	set commands {}
+	if {$option eq "-from"} {
+		lappend kept {*}$inverted_starts
+	} elseif {$inverted_starts ne {}} {
+		lappend commands [list [string map {rise fall fall rise} $option] $inverted_starts]
+	}
+	if {$kept ne {}} { lappend commands [list $option $kept] }
+	if {$ends ne {}} { lappend commands [list [string range $option 0 end-2]through $moved -to $ends] }
+	return $commands
+}
+proc ::ysta::with_word {commands word moved} {
+	if {$moved eq {}} { return [lmap words $commands { linsert $words end $word }] }
+	set next {}
+	foreach words $commands {
+		# the moved end words take the place of the option
+		foreach end_words $moved { lappend next [list {*}[lrange $words 0 end-1] {*}$end_words] }
+	}
+	return $next
+}
+proc ::ysta::has_token {word} { expr {[string first __ysta_ $word] >= 0} }
+proc ::ysta::run {cmd args} {
+	set cell [lindex $args end]
+	if {$cmd eq "set_disable_timing" && [llength $args] > 1 && [has_token $cell]} {
+		return [uplevel #0 [linsert [moved_arc $cell [lrange $args 0 end-1]] 0 ::sta::$cmd]]
+	}
+	set commands {{}}
+	foreach word $args {
+		set option [lindex $commands 0 end]
+		set moved {}
+		# only a lost clock leaves an empty word, resolve makes it an error
+		if {$word eq {}} { resolve {} }
+		if {[has_token $word]} {
+			set is_path_end [expr {$cmd in $::ysta::path_cmds && $option in $::ysta::path_end_options}]
+			if {$is_path_end} { set moved [moved_end_words $option $word] }
+			set word [resolve $word [wire_as $cmd $option]]
+			# a pin that flatten dissolved is several pins of one clock, the command takes one
+			if {$option eq "-reference_pin"} { set word [lrange $word 0 0] }
+		}
+		set commands [with_word $commands $word $moved]
+	}
+	# sdc_file_line of OpenSTA reads the text of each command on the stack as a list, so no {*} here
+	foreach words $commands { uplevel #0 [linsert $words 0 ::sta::$cmd] }
+}
+proc ::ysta::run_scripts {space scripts} {
+	set lost 0
+	foreach item $scripts {
+		lassign $item mode text
+		if {![mode_exists $mode]} continue
+		::sta::set_cmd_mode $mode
+		set failed [catch {namespace eval $space $text} error]
+		# one line for the log text, a user word of a kept or replay script can have a backslash-newline
+		set log_text [string trim [regsub -all {\s+} [string map {"\\\n" " "} $text] { }]]
+		incr lost [loss $failed $error $log_text]
+	}
+	return $lost
+}
+proc ::ysta::apply {} {
+	incr ::ysta::rebuilds
+	set scene [::sta::cmd_scene]
+	set cmd_mode [::sta::cmd_mode_name]
+	# sta_warn and sta_error add the script file and line to messages
+	set script [info script]
+	info script {}
+	set ::ysta::kept {}
+	set lost [run_scripts ::ysta::sdc $::ysta::captured]
+	# captured commands are journaled again, only a replayed one stays in the journal for the next capture
+	set ::ysta::journal {}
+	incr lost [run_scripts ::ysta::byname $::ysta::replay]
+	set ::ysta::replay {}
+	# the scene sets its own mode
+	::sta::set_cmd_scene $scene
+	::sta::set_cmd_mode $cmd_mode
+	info script $script
+	# a new clock can get the handle word of an old one, so the handles that the scripts got do not stay
+	array unset ::ysta::live_handles
+	return $lost
+}
+
+# OpenSTA crashes on an empty first argument
 proc ::ysta::skip_empty {cmd first args} {
 	if {[llength $first]} { tailcall $cmd $first {*}$args }
 }
@@ -33,265 +407,70 @@ foreach cmd {set_clock_sense_cmd find_fanin_pins find_fanin_insts find_fanout_pi
 	if {[catch {rename ::sta::$cmd ::sta::ysta_$cmd} err]} { error "cannot wrap $cmd: $err" }
 	interp alias {} ::sta::$cmd {} ::ysta::skip_empty ::sta::ysta_$cmd
 }
-proc ::ysta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timestamp} {
-	# a pipe or terminal cannot be read back
-	set path $filename
-	if {[file exists $filename] && ![file isfile $filename] && ![file isdirectory $filename]} { close [file tempfile path] }
-	::ysta::stale_names 1
-	set failed [catch {::sta::ysta_write_sdc_cmd $path $mode $leaf $compatible $digits $gzip $no_timestamp} err options]
-	::ysta::stale_names 0
-	# an unknown mode writes no file
-	set written [expr {!$failed && [::sta::is_object [::sta::find_mode $mode]]}]
-	try {
-		if {$written && [file readable $path]} { ::ysta::drop_stale_lines $path $gzip }
-		if {$written && $path ne $filename} { ::ysta::copy_file $path $filename }
-	} finally {
-		if {$path ne $filename} { file delete $path }
-	}
-	if {$failed} { return -options $options $err }
-}
-# open reads a name that starts with | as a pipeline, file normalize makes it a path
-proc ::ysta::copy_file {from to} {
-	set in [open [file normalize $from] rb]
-	try {
-		set out [open [file normalize $to] wb]
-		try { fcopy $in $out } finally { close $out }
-	} finally {
-		close $in
-	}
-}
-proc ::ysta::drop_stale_lines {filename gzip} {
-	set channel [open [file normalize $filename] rb]
-	try {
-		if {$gzip} { zlib push gunzip $channel }
-		set text [read $channel]
-	} finally {
-		close $channel
-	}
-	if {[string first "\x01ysta_stale" $text] < 0} return
-	set lines [split $text \n]
-	set channel [open [file normalize $filename] wb]
-	try {
-		if {$gzip} { zlib push gzip $channel }
-		puts -nonewline $channel [join [lsearch -all -inline -not -glob $lines "*\x01ysta_stale*"] \n]
-	} finally {
-		close $channel
-	}
+foreach {why cmds} {
+	{network edits are not supported, edit the design in yosys.}
+	{read_verilog_cmd clear_network make_instance_cmd delete_instance_cmd replace_cell_cmd make_net_cmd
+	 delete_net_cmd connect_pin_cmd disconnect_pin_cmd make_port_pin_cmd}
+	{it would clear the constraints, opensta_net -sync rebuilds the network.} network_changed
+	{the STA instance belongs to opensta_net.} delete_all_memory
+} { foreach cmd $cmds { proc ::sta::$cmd {args} [list error "Error: 2929 [regsub {_cmd$} $cmd {}]: $why"] } }
+foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
+foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_edit }
+
+# Sdc::clear keeps the resistance and voltage of nets of an earlier network, we drop their stale name lines
+proc ::ysta::drop_stale_lines {path gzip} {
+	set in [open $path rb]
+	if {$gzip} { zlib push gunzip $in }
+	set lines [split [read $in] \n]
+	close $in
+	set kept [lsearch -all -inline -not -glob $lines *__ysta_stale*]
+	if {[llength $kept] == [llength $lines]} return
+	set out [open $path wb]
+	if {$gzip} { zlib push gzip $out }
+	puts -nonewline $out [join $kept \n]
+	close $out
 }
 if {[catch {rename ::sta::write_sdc_cmd ::sta::ysta_write_sdc_cmd} err]} { error "cannot wrap write_sdc_cmd: $err" }
-interp alias {} ::sta::write_sdc_cmd {} ::ysta::write_sdc_cmd
-foreach {cmd why} {
-	read_verilog_cmd {read_verilog: network edits are not supported, edit the design in yosys.}
-	clear_network {clear_network: network edits are not supported, edit the design in yosys.}
-	network_changed {network_changed: it would clear the constraints, opensta_net -sync rebuilds the network.}
-	delete_all_memory {delete_all_memory: the STA instance belongs to opensta_net.}
-} { proc ::sta::$cmd {args} [list error "Error: 2929 $why"] }
-# autosync after an edit
-foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_yosys }
-# end the epoch before a tcl edit
-foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
+proc ::sta::write_sdc_cmd {filename mode leaf compatible digits gzip no_timestamp} {
+	set ::ysta::writing_sdc 1
+	try {
+		::sta::ysta_write_sdc_cmd $filename $mode $leaf $compatible $digits $gzip $no_timestamp
+	} finally {
+		set ::ysta::writing_sdc 0
+	}
+	set path [file normalize $filename]
+	# an unknown mode writes no file, a device is not read back
+	if {$::ysta::rebuilds == 0 || ![::ysta::mode_exists $mode] || ![file isfile $path]} return
+	::ysta::drop_stale_lines $path $gzip
+}
 
-# ---- Journal
-
-# journal each command, keep the unwritten ones
-proc ::ysta::record {cmd code result op} {
-	variable journal
-	variable kept
-	variable kept_families
-	variable unwritten_cmds
-	variable families
-	variable property_types
-	if {$code != 0} return
-	set mode [::sta::cmd_mode_name]
-	lappend journal [list $mode $cmd]
-	if {[catch {llength $cmd}]} return
-	set name [namespace tail [lindex $cmd 0]]
-	if {$name ni $unwritten_cmds && ![dict exists $families $name]} return
-	set family {}
-	if {[dict exists $families $name]} { set family [list $mode [dict get $families $name]] }
-	if {$name eq "set_property" && ([catch {::sta::object_type [lindex $cmd 1]} type] || $type ni $property_types)} return
-	if {![::ysta::unwritten $name $cmd] && ![dict exists $kept_families $family]} return
-	lappend kept [list $mode [::ysta::activity_as_density $cmd]]
-	if {$family ne {}} { dict set kept_families $family 1 }
-}
-proc ::ysta::clear {} {
-	set ::ysta::journal {}
-	set ::ysta::kept {}
-	set ::ysta::kept_families {}
-}
-proc ::ysta::clear_journal {} { set ::ysta::journal {} }
-# remove_delay_slew_annotations undoes the kept set_assigned_* commands
-proc ::ysta::drop_assigned {cmd code result op} {
-	if {$code != 0} return
-	set kept {}
-	foreach item $::ysta::kept {
-		if {![string match set_assigned_* [namespace tail [lindex $item 1 0]]]} { lappend kept $item }
+# a rebuild frees the clocks and the timing edges, a new object can get the memory of an old one
+proc ::ysta::note_handles {cmd code result op} {
+	foreach handle [regexp -all -inline {\m_[0-9a-f]+_p_(?:Clock|Edge)\M} $result] {
+		set ::ysta::live_handles($handle) 1
 	}
-	set ::ysta::kept $kept
 }
-trace add execution ::sta::remove_delay_slew_annotations leave ::ysta::drop_assigned
-# OpenSTA keeps a hierarchical pin disable as wire edges in a set that orders pins by id,
-# so each one is undone while its pins live, a sync applies it again
-# no network call here: it can sync, and the sync would miss this pin. A leaf pin is undone too, the clear drops it anyway
-proc ::ysta::record_hier_disable {cmd code result op} {
-	if {$code == 0} { lappend ::ysta::hier_disables [list [::sta::cmd_mode_name] [lindex $cmd 1]] }
+foreach cmd {get_clocks find_clock get_property get_timing_edges} {
+	trace add execution ::sta::$cmd leave ::ysta::note_handles
 }
-trace add execution ::sta::disable_pin leave ::ysta::record_hier_disable
-# 1 if it changed the cmd mode
-proc ::ysta::undo_hier_disables {} {
-	set disables $::ysta::hier_disables
-	set ::ysta::hier_disables {}
-	set changed 0
-	foreach item $disables {
-		lassign $item mode pin
-		# a deleted mode took its disables along
-		if {![::sta::is_object [::sta::find_mode $mode]]} continue
-		if {$mode ne [::sta::cmd_mode_name]} {
-			::sta::set_cmd_mode $mode
-			set changed 1
-		}
-		catch {::sta::unset_disable_pin $pin}
+# a query syncs first so the next capture has the command, we refuse a handle that no getter gave since the rebuild
+proc ::ysta::sync_first {cmd op} {
+	::sta::network_is_linked
+	foreach {handle type} [regexp -all -inline {\m_[0-9a-f]+_p_(Clock|Edge)\M} $cmd] {
+		if {[info exists ::ysta::live_handles($handle)]} continue
+		set object [dict get {Clock clock Edge {timing edge}} $type]
+		error "Error: 2931 a $object handle of an earlier network names no object, get the $object again."
 	}
-	return $changed
 }
-proc ::ysta::kept_count {} { return [llength $::ysta::kept] }
-# {texts untexted} of kept or journal
-proc ::ysta::texts {which} {
-	set texts [dict create]
-	set untexted 0
-	foreach item [set ::ysta::$which] {
-		lassign $item mode cmd
-		if {[catch {::ysta::sdc_text $cmd} text]} { incr untexted; continue }
-		dict append texts $mode "$text\n"
-	}
-	return [list $texts $untexted]
-}
-# 1 if write_sdc does not write it
-proc ::ysta::unwritten {name cmd} {
-	variable unwritten_cmds
-	variable unwritten_options
-	if {$name in $unwritten_cmds} { return 1 }
-	foreach option $unwritten_options { if {$option in $cmd} { return 1 } }
-	if {$name ne "set_disable_timing"} { return 0 }
-	foreach word [lrange $cmd 1 end] {
-		foreach obj [::ysta::objects $word] {
-			if {[::sta::object_type $obj] eq "Pin" && [$obj is_hierarchical]} { return 1 }
-		}
-	}
-	return 0
-}
-# -activity as -density
-proc ::ysta::activity_as_density {cmd} {
-	if {[namespace tail [lindex $cmd 0]] ne "set_power_activity"} { return $cmd }
-	set at [lsearch -exact $cmd -activity]
-	if {$at < 0} { return $cmd }
-	set period [::sta::time_sta_ui [::sta::clock_min_period [::sta::cmd_mode_name]]]
-	set cmd [lreplace $cmd $at $at+1 -density [expr {[lindex $cmd $at+1] / $period}]]
-	set at [lsearch -exact $cmd -clock]
-	if {$at >= 0} { set cmd [lreplace $cmd $at $at+1] }
-	return $cmd
-}
-# the sta objects in a word
-proc ::ysta::objects {word} {
-	set objs {}
-	if {[catch {llength $word}]} { return {} }
-	foreach item $word {
-		if {[llength $item] > 1} {
-			lappend objs {*}[::ysta::objects $item]
-		} elseif {[::sta::is_object $item]} {
-			lappend objs $item
-		}
-	}
-	return $objs
-}
-# the command as sdc text
-proc ::ysta::sdc_text {cmd} {
-	set words [list [namespace tail [lindex $cmd 0]]]
-	foreach word [lrange $cmd 1 end] {
-		set objs [::ysta::objects $word]
-		if {$objs eq {}} { lappend words [list $word]; continue }
-		set getters [lmap obj $objs { ::ysta::getter $obj }]
-		if {[llength $getters] == 1} { lappend words [lindex $getters 0]; continue }
-		lappend words "\[list [join $getters { }]\]"
-	}
-	return [join $words " "]
-}
-# a getter by name
-proc ::ysta::getter {obj} {
-	set type [::sta::object_type $obj]
-	switch $type {
-		Pin {
-			if {[$obj is_top_level_port]} { return "\[get_ports {[get_name [$obj port]]}\]" }
-			return "\[get_pins {[get_full_name $obj]}\]"
-		}
-		Instance { return "\[get_cells {[get_full_name $obj]}\]" }
-		Net { return "\[get_nets {[get_full_name $obj]}\]" }
-		Port { return "\[get_ports {[get_name $obj]}\]" }
-		Clock { return "\[get_clocks {[get_name $obj]}\]" }
-		LibertyCell { return "\[get_lib_cells {[get_full_name $obj]}\]" }
-		LibertyPort { return "\[get_lib_pins {[get_full_name $obj]}\]" }
-	}
-	error "no getter for $type"
-}
-# record the constraint commands
+foreach cmd {get_clocks all_clocks} { trace add execution ::sta::$cmd enter ::ysta::sync_first }
+# traces and no wrapper procs, namespace import binds the command, so a rename leaves the import unwrapped
 foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
-	if {[info commands ::sta::$cmd] ne {}} { trace add execution ::sta::$cmd leave ::ysta::record }
-}
-
-# Apply
-
-# the edges between the pins, else the wire edges into froms
-proc ::ysta::edges {froms tos} {
-	set edges {}
-	foreach from $froms {
-		set from_edges {}
-		foreach to $tos { lappend from_edges {*}[get_timing_edges -from $from -to $to] }
-		if {$from_edges eq {}} { return [::ysta::wire_edges $froms] }
-		lappend edges {*}$from_edges
-	}
-	return $edges
-}
-# rise and fall swap behind an inverter
-proc ::ysta::start_edge {flag froms} {
-	foreach from $froms {
-		foreach edge [get_timing_edges -from $from] {
-			if {[::ysta::inverts $edge]} { return [string map {rise fall fall rise} $flag] }
-		}
-	}
-	return $flag
-}
-# 1 if each arc inverts
-proc ::ysta::inverts {edge} {
-	set arcs [$edge timing_arcs]
-	foreach arc $arcs {
-		if {[$arc from_edge_name] eq [$arc to_edge_name]} { return 0 }
-	}
-	return [expr {$arcs ne {}}]
-}
-# the wire edges into the pins
-proc ::ysta::wire_edges {pins} {
-	set edges {}
-	foreach pin $pins {
-		foreach edge [get_timing_edges -to $pin] {
-			if {[$edge role] eq "wire"} { lappend edges $edge }
-		}
-	}
-	if {$edges eq {}} { error "no wire edge into the pins" }
-	return $edges
-}
-# 1 if each edge into founds inverts and comes from an exact pin
-proc ::ysta::behind_inverter {founds exacts} {
-	set nets {}
-	foreach exact $exacts { lappend nets [get_full_name [get_nets -of_objects $exact]] }
-	foreach found $founds {
-		set edges [get_timing_edges -to $found]
-		if {$edges eq {}} { return 0 }
-		foreach edge $edges {
-			set net [get_full_name [get_nets -of_objects [$edge from_pin]]]
-			if {![::ysta::inverts $edge] || $net ni $nets} { return 0 }
-		}
-	}
-	return 1
+	if {[info commands ::sta::$cmd] eq {}} continue
+	trace add execution ::sta::$cmd enter ::ysta::enter
+	# the last trace runs first, a sync inside it runs commands of this name, they skip only a trace that runs
+	trace add execution ::sta::$cmd enter ::ysta::sync_first
+	trace add execution ::sta::$cmd leave ::ysta::record
+	interp alias {} ::ysta::sdc::$cmd {} ::ysta::run $cmd
 }

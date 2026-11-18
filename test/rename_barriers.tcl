@@ -1,4 +1,4 @@
-# barriers do not block rename -wire, and -unprotect leaves no cut wire that autoname named
+# barriers do not block rename -wire
 source test/lib/check.tcl
 yosys read_verilog test/data/moved_pins.v
 yosys hierarchy -top top
@@ -16,23 +16,10 @@ yosys select -assert-count 3 {t:$_DFF*} n:*_reg %i
 yosys autoname
 yosys opensta_net -unprotect
 yosys opt_clean -purge
-yosys select -assert-none w:*netview_anchor*
-yosys design -reset
-yosys read_verilog test/data/track.v
-yosys hierarchy -top top
-yosys proc
-yosys opt
-yosys techmap
-yosys opt
-yosys dfflibmap -liberty $nangate
-yosys abc -liberty $nangate
-yosys opensta_net -liberty $nangate -link
-yosys opensta_net -protect
+link_track
 yosys opensta_net -sdc test/data/track.sdc
 yosys opt_clean
 yosys select -assert-min 1 t:\$barrier
 yosys autoname
-yosys select -assert-min 1 w:*netview_anchor*
 yosys opensta_net -unprotect
 yosys opt_clean -purge
-yosys select -assert-none w:*netview_anchor* c:*netview_anchor*

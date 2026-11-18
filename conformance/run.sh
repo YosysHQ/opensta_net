@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# run the OpenSTA network/, sdc/ and search/ tests on the design in yosys and
-# compare the output with their .ok: bash conformance/run.sh [name...]
+# bash conformance/run.sh [name...] runs OpenSTA tests on the yosys design
 set -u
 cd "$(dirname "$0")/.."
 ROOT=$PWD
@@ -8,7 +7,7 @@ STA_ROOT="${STA_ROOT:-$ROOT/deps/OpenSTA}"
 YOSYS="${YOSYS:-$ROOT/deps/yosys/build/yosys}"
 PLUGIN="${PLUGIN:-$ROOT/opensta_net.so}"
 OUT=$ROOT/conformance/out
-# edit tests
+# tests that edit the network, opensta_net refuses them
 refused=" network_modify network_deep_modify network_connected_pins network_cell_match_merge
 	network_multi_lib network_leaf_iter network_hierarchy network_merge_bus_hier
 	network_connect_liberty search_network_edit_deep search_network_edit_replace

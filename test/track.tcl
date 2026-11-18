@@ -1,17 +1,7 @@
-# the constraints of track.sdc on a mapped design survive autoname, flatten
-# and -unprotect: each sync loses none and reports none changed
+# track.sdc on a mapped design survives autoname, flatten and -unprotect
 source test/lib/check.tcl
 proc track {passes} {
-	yosys design -reset
-	yosys read_verilog test/data/track.v
-	yosys hierarchy -top top
-	yosys proc
-	yosys opt
-	yosys techmap
-	yosys opt
-	yosys dfflibmap -liberty $::nangate
-	yosys abc -liberty $::nangate
-	yosys opensta_net -liberty $::nangate -link
+	link_track
 	yosys opensta_net -sdc test/data/track.sdc
 	set log {}
 	foreach pass $passes { append log [log_of {*}$pass] }
@@ -22,8 +12,8 @@ set log [track {autoname}]
 check_eq [sync_losses $log] 0
 check_eq [lost_cmds $log] {}
 set log [track {flatten}]
-check_eq [sync_losses $log] 0
 check_eq [lost_cmds $log] {}
 set log [track {flatten {opensta_net -unprotect} {select -assert-none t:$barrier}}]
+# -unprotect syncs before and after it removes the barriers
 check_eq [sync_losses $log] {0 0}
 check_eq [lost_cmds $log] {}

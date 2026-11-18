@@ -1,16 +1,10 @@
 #ifndef OPENSTA_NET_H
 #define OPENSTA_NET_H
 
-#include "kernel/yosys.h"
-#include "kernel/nettrack.h"
-
-#include <tcl.h>
-
 #include "sta/ReportTcl.hh"
 #include "sta/Sta.hh"
 
 #include "constraints.h"
-#include "yosys_network.hh"
 
 namespace opensta_net {
 
@@ -18,50 +12,51 @@ using Yosys::RTLIL::Design;
 
 struct YosysSta;
 extern YosysSta *the_sta;
+bool queryHook();
 
-// Feeds a message to every log sink but the console, which the Tcl channel
-// serves, so STA and Tcl output keep their order there
+// skips the console, the Tcl channel prints there
 struct NonConsoleTee {
 	const Yosys::LogMessage &msg;
 	void operator()(Yosys::LogSink &sink) const;
 };
 
 struct YosysStaReport : public sta::ReportTcl {
-	int warnings = 0;
-	size_t printString(const char *buffer, size_t length) override;
+	size_t printConsole(const char *buffer, size_t length) override;
+};
+
+// the adapter loop, end -> capture -> change -> query -> sync -> rebuild -> resolveAndApply
+class Epochs {
+	enum class Phase : uint8_t {
+		Stopped, // no network until link
+		Open,    // queries see the network
+		Ended,   // maybe stale or unlinked, next query syncs
+		Building // in link or sync, no nested sync
+	};
+public:
+	void end();
+	bool stale() const;
+	bool syncForQuery(Design *design);
+	void sync(Design *design);
+	void link(Design *design);
+	void unprotect(Design *design);
+private:
+	void capture();
+	Phase rebuild(Design *design);
+	Phase phase_ = Phase::Stopped;
 };
 
 struct YosysSta : public sta::Sta {
-	ysta::YosysNetwork *yosys_network = nullptr;
-	Yosys::NetView view;
-	// the constraints of the last epoch end
-	EpochConstraints constraints;
-	std::vector<ysta::Token> tokens;
+	std::vector<SdcObjectRef> refs; // refs[N] of token N, commands in ::ysta::captured
+	CommandLoss loss;               // of the command the sync applies now
 	Yosys::NetTracker tracker;
-	Yosys::TrackMode track_mode = Yosys::TrackMode::Barriers; // until -unprotect
-	// sync
-	bool autosync = false;
-	bool running = false;
-	bool rebuild_pending = false;
+	bool track_barriers = true;     // -link or -protect until -unprotect, a $barrier or keep holds each ref
+	bool autosync = false;          // sync after each Tcl edit command
+
+	Epochs epochs;
 	std::string last_unbuildable_reason;
 
 	void makeReport() override;
 	void makeNetwork() override;
-	sta::Instance *makeInstance(const char *name, sta::LibertyCell *cell, sta::Instance *parent) override;
-	void deleteInstance(sta::Instance *inst) override;
-	void replaceCell(sta::Instance *inst, sta::Cell *to_cell, sta::LibertyCell *to_lib_cell) override;
-	sta::Net *makeNet(const char *name, sta::Instance *parent) override;
-	void deleteNet(sta::Net *net) override;
-	void connectPin(sta::Instance *inst, sta::Port *port, sta::Net *net) override;
-	void connectPin(sta::Instance *inst, sta::LibertyPort *port, sta::Net *net) override;
-	void disconnectPin(sta::Pin *pin) override;
-	void makePortPin(const char *port_name, sta::PortDirection *dir) override;
-};
-
-struct SyncRunning {
-	bool &running;
-	explicit SyncRunning(bool &flag);
-	~SyncRunning();
 };
 
 struct PassOptions {
@@ -69,50 +64,27 @@ struct PassOptions {
 	bool link = false, sync = false, autosync = false, protect = false, unprotect = false;
 };
 
-// Tcl
 bool tclEval(const std::string &script);
-
-// epoch.cc: epoch end, rebuild, link
-bool writeModeSdc(const std::string &mode, std::string &text);
-bool writeAllModes(SdcTextByMode &result);
-bool captureEpochConstraints();
-void closeEpoch();
-void openEpoch();
-bool needsSync();
-bool canBuild(Design *design);
-void syncView(Design *design);
-void rebuildAndReapply(Design *design);
-void warnDroppedParasitics();
-void warnSharedNames();
-void undoHierPinDisables();
-void dropView();
-bool linkView(Design *design, std::string &error);
-void linkDesign(Design *design);
-
-// Tcl traces
 int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-int tclAfterYosys(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
-int tclStaleNames(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[]);
-
-// Boot
-bool tclFailure(const std::string &what, std::string &error);
-bool evalStaInit(Tcl_Interp *interp);
-bool makeSta(std::string &error);
-bool bootTcl(std::string &error);
+int tclAfterEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[]);
+bool topHasScopes(Design *design);
 void beforePass(Yosys::Pass *pass, Design *design);
+void makeSta();
+void bootTcl();
 void bootSta();
-
-// opensta_net
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt);
 void linkOrSync(Design *design, const PassOptions &opt);
 void readLiberty(const std::string &file);
-void checkSourced(bool ok, const std::string &file);
-std::string unquote(const std::string &arg);
+void sourceFile(const std::string &file, const std::string &command, const std::string &tail);
 void evalTcl(const std::string &cmd);
-void setProtection(Design *design, const PassOptions &opt);
+
+bool canBuild(Design *design);
+void warnDroppedParasitics();
+void dropView();
+bool linkView(Design *design, std::string &error);
 
 struct OpenstaNetPass : public Yosys::Pass {
-	OpenstaNetPass();
+	OpenstaNetPass() : Pass("opensta_net", "OpenSTA network adapter") {}
 	void help() override;
 	void execute(std::vector<std::string> args, Design *design) override;
 };

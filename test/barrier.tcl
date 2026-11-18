@@ -1,4 +1,4 @@
-# $barrier cells are transparent: the view links and times as OpenSTA's reader of the same netlist without them
+# $barrier cells are transparent to linking and timing
 source test/lib/check.tcl
 yosys read_liberty -lib test/data/simple.lib
 yosys read_verilog test/data/barrier.v
@@ -22,6 +22,7 @@ yosys optbarriers -remove
 yosys opt_clean
 yosys select -assert-none {t:$barrier}
 yosys write_verilog -noattr test/out/barrier.v
+# same as OpenSTA's own reader on the netlist without barriers
 check_eq $got [reference "
 	read_liberty test/data/simple.lib
 	read_verilog test/out/barrier.v

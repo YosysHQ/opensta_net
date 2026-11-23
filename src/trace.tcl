@@ -42,6 +42,7 @@ namespace eval ::ysta {
 	variable wire_as_by_cmd {
 		set_disable_timing edges set_case_analysis driven set_logic_zero driven set_logic_one driven
 		set_logic_dc driven create_clock pins create_generated_clock pins set_clock_latency pins
+		set_load nets set_resistance nets set_timing_derate nets set_voltage nets
 	}
 }
 

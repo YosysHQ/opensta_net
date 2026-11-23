@@ -15,7 +15,8 @@ enum class WireAs : uint8_t {
 	None,   // cell nothing, pin its loads, stand-in leaf pins are a changed form
 	Pins,   // loads, stand-in leaf pins are the same form
 	Driven, // driven loads only, a constant is a loss
-	Edges   // wire edges into the loads
+	Edges,  // wire edges into the loads
+	Nets    // as None, a net that is pins now gives a net-only command nothing
 };
 
 // one per token of the last capture, see Epochs::capture
@@ -24,6 +25,7 @@ struct SdcObjectRef : Yosys::TrackedRef {
 	bool was_start = false;                        // Pin, valid path start at the capture
 	bool was_end = false;                          // Pin, valid path end at the capture
 	bool was_hier = false;                         // Net or scope Pin at capture, leaf pins stand in for a gone scope
+	bool was_net = false;                          // Net at capture
 	bool isWire() const { return !loads.empty(); } // a wire or a constant now
 	Handles objects(WireAs wire_as = WireAs::None) const;
 };

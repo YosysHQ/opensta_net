@@ -13,7 +13,7 @@ int tclResolve(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
 	if (wrongArgCount(interp, objc, objv, 1, 2, "word ?wire_as?"))
 		return TCL_ERROR;
-	static const char *const names[] = {"none", "pins", "driven", "edges", nullptr}; // WireAs order
+	static const char *const names[] = {"none", "pins", "driven", "edges", "nets", nullptr}; // WireAs order
 	int index = int(WireAs::None);
 	if (objc == 3 && Tcl_GetIndexFromObj(interp, objv[2], names, "wire_as", TCL_EXACT, &index) != TCL_OK)
 		return TCL_ERROR;

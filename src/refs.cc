@@ -10,7 +10,11 @@ namespace opensta_net {
 // a wire is its loads, they have the paths through the old object, see WireAs
 Handles SdcObjectRef::objects(WireAs wire_as) const
 {
-	if (isWire() && wire_as == WireAs::None && kind != Kind::Pin)
+	bool takes_loads = wire_as != WireAs::None && wire_as != WireAs::Nets;
+	if (isWire() && !takes_loads && kind != Kind::Pin)
+		return {};
+	// a net-only command takes no stand-in pins
+	if (was_net && kind == Kind::Pin && wire_as == WireAs::Nets)
 		return {};
 	if (kind == Kind::Net)
 		return staNetwork().handles(nets);
@@ -40,6 +44,7 @@ void makeRefs(const ysta::TokenIndexes &tokens)
 			ref.kind = SdcObjectRef::Kind::Net;
 			ref.nets.push_back(network.recordOf(handle, &NetView::nets));
 			ref.was_hier = true;
+			ref.was_net = true;
 			break;
 		case ysta::Handle::Kind::Pin:
 			ref.kind = SdcObjectRef::Kind::Pin;

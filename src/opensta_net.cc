@@ -207,15 +207,15 @@ void OpenstaNetPass::help()
 	log("\n");
 	log("    opensta_net [options]\n\n");
 	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter and keep its\n");
-	log("netlist view in step with the design. OpenSTA network edits (replace_cell,\n");
+	log("STA network in step with the design. OpenSTA network edits (replace_cell,\n");
 	log("connect_pin, ...) are refused, edit the design in yosys.\n\n");
 	log("    -liberty <file>\n");
 	log("        read a liberty file into OpenSTA.\n\n");
 	log("    -link\n");
-	log("        build the view from scratch. A module used more than once gets one\n");
+	log("        build the network from scratch. A module used more than once gets one\n");
 	log("        set of objects per use. Constraints are cleared.\n\n");
 	log("    -sync\n");
-	log("        if the design changed since the view was built, rebuild it and\n");
+	log("        if the design changed since the network was built, rebuild it and\n");
 	log("        apply the constraints again. Every call and every OpenSTA query\n");
 	log("        does this implicitly.\n\n");
 	log("    -autosync\n");
@@ -228,7 +228,7 @@ void OpenstaNetPass::help()
 	log("        A later pass can remove a constrained object, the sync reports it.\n");
 	log("\n");
 	log("    -sdc <file>\n");
-	log("        source an SDC file in the shared interpreter.\n\n");
+	log("        read an SDC file with read_sdc.\n\n");
 	log("    -source <file>\n");
 	log("        source a Tcl file in the shared interpreter.\n\n");
 	log("    -eval <tcl>\n");

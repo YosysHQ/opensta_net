@@ -137,17 +137,21 @@ void dropView()
 	}
 }
 
-// a log_cmd_error in the build throws in a yosys command, else yosys exits
+// a log_cmd_error in the build is a failed build, also in a query outside a yosys command
 bool linkView(Design *design, std::string &error)
 {
 	dropView();
 	ysta::YosysNetwork *network = &staNetwork();
 	size_t shared_names = 0;
 	try {
+		auto guard = logger().error_throw_scope();
 		shared_names = network->link(std::make_unique<NetView>(design, network));
 	} catch (const sta::Exception &exception) {
 		network->unlink();
 		error = exception.what();
+		return false;
+	} catch (const log_cmd_error_exception &) {
+		error = "the NetView build failed, see the error above";
 		return false;
 	}
 	if (shared_names > 0)

@@ -146,7 +146,7 @@ std::vector<sta::Edge *> edgesAt(const sta::Pin *pin, Direction direction)
 
 void appendEdges(Tcl_Obj *list, const sta::Pin *from, const sta::Pin *to)
 {
-	Tcl_Interp *interp = yosys_get_tcl_interp();
+	Tcl_Interp *interp = the_sta->tclInterp();
 	std::string from_handle = objectHandle(ysta::Handle(from));
 	std::string to_handle = objectHandle(ysta::Handle(to));
 	std::string get_edges = "::get_timing_edges -from " + from_handle + " -to " + to_handle;
@@ -472,7 +472,7 @@ std::string lossReason(const CommandLoss &loss, bool failed, const std::string &
 // count of lost or changed commands, clocks and library objects apply by name
 int resolveAndApply()
 {
-	Tcl_Interp *interp = yosys_get_tcl_interp();
+	Tcl_Interp *interp = the_sta->tclInterp();
 	the_sta->loss = {};
 	the_sta->tracker.resolve(staNetwork().view(), trackedRefs());
 	int lost = 0;

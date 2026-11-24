@@ -1,4 +1,4 @@
-// epoch end, sync and link of the STA network, see opensta_net.h
+// sync, link and capture of the STA network, see opensta_net.h
 #include "opensta_net.h"
 
 #include "sta/Mode.hh"
@@ -12,6 +12,8 @@ namespace opensta_net {
 // write_sdc with object tokens, each anchors its rtlil objects
 void Epochs::capture()
 {
+	if (!staNetwork().linked())
+		return;
 	ysta::TokenIndexes tokens;
 	std::string capture_modes = "::ysta::capture";
 	for (const sta::Mode *mode : the_sta->modes())
@@ -21,41 +23,12 @@ void Epochs::capture()
 	bool written = tclEval(capture_modes);
 	staNetwork().setTokens(nullptr);
 	if (!written) {
-		log_warning("opensta_net: write_sdc failed: %s\n", Tcl_GetStringResult(yosys_get_tcl_interp()));
+		log_warning("opensta_net: write_sdc failed (%s), the last capture stays, a rebuild before the next capture "
+		            "drops the newer changes.\n", Tcl_GetStringResult(the_sta->tclInterp()));
 		return;
 	}
 	makeRefs(tokens);
-	the_sta->tracker.checkpoint(staNetwork().view(), trackedRefs(), the_sta->track_barriers);
-}
-
-// Open -> capture -> Ended, before each pass but opensta_net, rtlil::set_attr and rtlil::set_param
-void Epochs::end()
-{
-	if (phase_ != Phase::Open)
-		return;
-	// a stale view cannot anchor its objects in the changed design, the sync then replays the journal by name
-	if (staNetwork().view().upToDate())
-		capture();
-	staNetwork().dropHierNames();
-	phase_ = Phase::Ended;
-}
-
-bool Epochs::stale() const
-{
-	if (phase_ == Phase::Stopped)
-		return false;
-	bool is_current = staNetwork().linked() && staNetwork().view().upToDate();
-	return !is_current;
-}
-
-// before each OpenSTA query, true when queries see the network
-bool Epochs::syncForQuery(Design *design)
-{
-	if (phase_ == Phase::Building)
-		return staNetwork().linked();
-	if (phase_ == Phase::Ended && design != nullptr)
-		sync(design);
-	return phase_ == Phase::Open;
+	the_sta->tracker.checkpoint(staNetwork().view(), trackedRefs());
 }
 
 bool canBuild(Design *design)
@@ -73,45 +46,41 @@ bool canBuild(Design *design)
 	return false;
 }
 
-// Open, Ended -> Open, a failed build or an unbuildable design -> Ended, throws -> Stopped
+// a failed build or an unbuildable design leaves no network, the next call builds again, throws -> stop
 void Epochs::sync(Design *design)
 {
-	if (phase_ == Phase::Stopped || phase_ == Phase::Building)
+	bool is_current = staNetwork().linked() && staNetwork().view().upToDate();
+	if (!started_ || is_current)
 		return;
-	if (!stale()) {
-		phase_ = Phase::Open;
-		return;
-	}
-	// queries see no network until a sync succeeds
-	if (!canBuild(design)) {
-		phase_ = Phase::Ended;
-		return;
-	}
-	phase_ = Phase::Building;
 	try {
-		phase_ = rebuild(design);
+		rebuild(design);
 	} catch (...) {
-		phase_ = Phase::Stopped;
-		dropView();
+		stop();
 		throw;
 	}
 }
 
-Epochs::Phase Epochs::rebuild(Design *design)
+// no network until -link
+void Epochs::stop()
+{
+	started_ = false;
+	dropView();
+}
+
+void Epochs::rebuild(Design *design)
 {
 	warnDroppedParasitics();
-	// before the link, old pins still live
-	tclEval("::ysta::name_journal");
-	tclEval("::ysta::undo_hier_disables");
+	dropView();
+	if (!canBuild(design))
+		return;
 	std::string error;
 	if (!linkView(design, error)) {
 		log_warning("opensta_net: cannot rebuild the STA network (%s), it stays unlinked until a sync "
 		            "succeeds.\n", error.c_str());
-		return Phase::Ended;
+		return;
 	}
 	int lost = resolveAndApply();
 	log("opensta_net: synced after design change, %d constraint(s) lost.\n", lost);
-	return Phase::Open;
 }
 
 void warnDroppedParasitics()
@@ -130,14 +99,20 @@ void warnDroppedParasitics()
 void dropView()
 {
 	if (staNetwork().linked()) {
+		// Sdc::clear keeps hierarchical pin disables, undo them while the pins live
+		tclEval("::ysta::undo_hier_disables");
 		// Sta::clear leaves the generated clock data of the old graph
 		the_sta->search()->arrivalsInvalid();
 		the_sta->networkChanged();
+		// Sta::clear frees the clocks and edges
+		tclEval("array unset ::ysta::live_handles");
+		// from now on old nets exist, see write_sdc_cmd
+		tclEval("incr ::ysta::rebuilds");
 		staNetwork().unlink();
 	}
 }
 
-// a log_cmd_error in the build is a failed build, also in a query outside a yosys command
+// a log_cmd_error in the build is a failed build
 bool linkView(Design *design, std::string &error)
 {
 	dropView();
@@ -163,40 +138,31 @@ bool linkView(Design *design, std::string &error)
 	return true;
 }
 
-// any phase -> Open, an unbuildable design keeps the phase
-// a failed build is a command error, it ends in Stopped, so no query retries it
+// an unbuildable design keeps the old network
+// a failed build is a command error, it ends in stop(), so no call retries it until -link
 void Epochs::link(Design *design)
 {
 	std::string reason;
 	if (!NetView::buildable(design, reason))
 		log_cmd_error("opensta_net: cannot link: %s.\n", reason.c_str());
 	the_sta->refs.clear();
-	the_sta->track_barriers = true;
 	the_sta->last_unbuildable_reason.clear();
-	the_sta->tracker.clear(design);
 	tclEval("::ysta::clear");
-	phase_ = Phase::Building;
+	started_ = true;
 	try {
 		if (!linkView(design, reason))
 			log_cmd_error("opensta_net: cannot link: %s\n", reason.c_str());
 	} catch (...) {
-		phase_ = Phase::Stopped;
-		dropView();
+		stop();
 		throw;
 	}
-	phase_ = Phase::Open;
 }
 
-// sync through the barriers -> capture puts only ids -> remove barriers -> sync by the ids of cells and wires
-// only an Open epoch has the capture, Stopped also skips the syncs
+// for the netlist write, barriers and keeps go, the network and the constraints end here until -link
 void Epochs::unprotect(Design *design)
 {
-	sync(design);
-	the_sta->track_barriers = false;
-	end();
-	// optbarriers runs as a pass, its beforePass calls end(), a no-op on the ended epoch
+	stop();
 	the_sta->tracker.unprotect(design);
-	sync(design);
 }
 
 } // namespace opensta_net

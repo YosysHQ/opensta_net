@@ -7,6 +7,8 @@ STA_ROOT="${STA_ROOT:-$ROOT/deps/OpenSTA}"
 YOSYS="${YOSYS:-$ROOT/deps/yosys/build/yosys}"
 PLUGIN="${PLUGIN:-$ROOT/opensta_net.so}"
 OUT=$ROOT/conformance/out
+# load.tcl links with ysta::load_design
+export OPENSTA_NET_CONFORMANCE=1
 # tests that edit the network, opensta_net refuses them
 refused=" network_modify network_deep_modify network_connected_pins network_cell_match_merge
 	network_multi_lib network_leaf_iter network_hierarchy network_merge_bus_hier

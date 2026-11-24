@@ -48,7 +48,6 @@ constexpr Handle::Kind recordKind(const Netlist::Net *) { return Handle::Kind::N
 template <typename Record> constexpr Handle::Kind record_kind = recordKind(static_cast<const Record *>(nullptr));
 
 using TokenIndexes = std::map<Handle, size_t>; // N of __ysta_tok_N by object
-using EpochHook = bool (*)();
 template <typename Record> using ViewTableGetter = const std::deque<Record> &(NetView::*)() const;
 
 namespace detail {
@@ -106,8 +105,6 @@ public:
 	using sta::ConcreteNetwork::cell;
 	using sta::ConcreteNetwork::direction;
 
-	explicit YosysNetwork(EpochHook open_epoch_hook) : open_epoch_hook_(open_epoch_hook) {}
-
 	size_t link(std::unique_ptr<NetView> view);
 	void unlink();
 	// when unlinked view() refuses, topInstance() is null, the tables are empty
@@ -115,7 +112,6 @@ public:
 	void dropHierNames() { hier_names_.clear(); } // a pass can change an hdlname, the view fingerprint has none
 	NetView &view() const;
 	bool describe(Netlist::CellType &type) override;
-	bool isLinked() const override;
 
 	// token mode while set, see Epochs::capture
 	// non-top instances, pins, nets and scalar top ports get token names
@@ -224,7 +220,6 @@ private:
 	TokenIndexes *tokens_ = nullptr;
 	int names_stale_nets_ = 0;                                        // set by write_sdc, old nets get the stale name
 	sta::Library *design_lib_ = nullptr;
-	EpochHook open_epoch_hook_;                                       // queryHook, relinks a changed design
 	sta::AttributeMap no_attributes_;
 	std::vector<std::unique_ptr<sta::ConcreteLibrary>> retired_libs_; // of earlier links, OpenSTA can point in
 	Yosys::dict<const Netlist::CellType *, StaCell> cells_;

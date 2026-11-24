@@ -8,10 +8,5 @@ proc read_verilog {file} {
 	set ::ysta_verilog $file
 }
 proc link_design {top} {
-	yosys tee -q design -reset
-	foreach lib $::ysta_libs { yosys tee -q read_liberty -lib $lib }
-	yosys tee -q read_verilog $::ysta_verilog
-	yosys tee -q hierarchy -top $top
-	yosys tee -q uniquify
-	yosys tee -q opensta_net -link
+	::ysta::load_design $::ysta_libs $::ysta_verilog $top
 }

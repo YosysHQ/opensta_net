@@ -1,7 +1,6 @@
 # after flatten the hierarchical name also finds a cell, a pin or a net, write_sdc keeps the yosys name
 source test/lib/check.tcl
 link_top test/data/flat.v
-yosys opensta_net -unprotect
 yosys flatten
 check_eq [names [get_cells u1/r]] u1.r
 check_eq [names [get_pins u1/r/Q]] u1.r/Q

@@ -142,7 +142,7 @@ std::string objectHandle(ysta::Handle handle)
 	// a getter walks each bus bit of the cell, a finder takes the exact name
 	static const char *finders[] = {"::sta::find_instance ", "::sta::find_pin ", "::sta::find_net "};
 	log_assert(handle.kind() != ysta::Handle::Kind::Term);
-	Tcl_Interp *interp = yosys_get_tcl_interp();
+	Tcl_Interp *interp = the_sta->tclInterp();
 	if (handle.kind() == ysta::Handle::Kind::Pin && staNetwork().isTopLevelPort(handle)) {
 		std::string port_name = objectName(&staNetwork(), handle);
 		std::string find_port = "::ysta::find_port " + tclQuoted(port_name);

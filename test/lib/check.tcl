@@ -46,6 +46,26 @@ proc temp_file {text} {
 	return $path
 }
 
+# runs a script in OpenSTA
+proc sta {script} { yosys opensta_net -eval $script }
+
+# the next capture fails at mode, once
+sta {
+	proc fail_capture {mode} {
+		rename ::write_sdc ::test_write_sdc
+		interp alias {} ::write_sdc {} ::test_write_sdc_but $mode
+	}
+	proc test_write_sdc_but {mode args} {
+		if {$mode ni $args} { return [::test_write_sdc {*}$args] }
+		rename ::write_sdc {}
+		rename ::test_write_sdc ::write_sdc
+		error "no write"
+	}
+}
+
+# other commands go to OpenSTA
+proc unknown {args} { sta $args }
+
 # read the liberty and the verilog into yosys, link the top
 proc link_top {verilog {top top} {lib test/data/simple.lib}} {
 	yosys read_liberty -lib $lib
@@ -93,16 +113,6 @@ proc log_of {args} {
 	return -code $failed $log
 }
 
-# the yosys log of a tcl script
-# it holds the syncs of its STA queries
-# yosys tcl ends the epoch first, as each pass does
-proc log_of_tcl {script} {
-	set path [temp_file [list uplevel #0 $script]]
-	set failed [catch {log_of tcl $path} log]
-	file delete $path
-	return -code $failed $log
-}
-
 # the lost count of each sync in a log
 proc sync_losses {log} {
 	set losses {}
@@ -110,16 +120,6 @@ proc sync_losses {log} {
 		lappend losses $lost
 	}
 	return $losses
-}
-
-# the lost counts of the sync after a yosys command with a capture that fails
-proc fail_capture {args} {
-	rename write_sdc ysta_test_write_sdc
-	proc ::write_sdc {args} { error "no write" }
-	yosys {*}$args
-	rename write_sdc {}
-	rename ysta_test_write_sdc write_sdc
-	sync_losses [log_of opensta_net -sync]
 }
 
 # the commands that the syncs in a log report lost or changed

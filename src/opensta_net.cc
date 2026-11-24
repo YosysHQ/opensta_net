@@ -31,56 +31,54 @@ size_t YosysStaReport::printConsole(const char *buffer, size_t length)
 
 void YosysSta::makeReport() { report_ = new YosysStaReport; }
 
-void YosysSta::makeNetwork() { network_ = new ysta::YosysNetwork(queryHook); }
+void YosysSta::makeNetwork() { network_ = new ysta::YosysNetwork; }
 
-bool tclEval(const std::string &script) { return Tcl_Eval(yosys_get_tcl_interp(), script.c_str()) == TCL_OK; }
+bool tclEval(const std::string &script) { return Tcl_Eval(the_sta->tclInterp(), script.c_str()) == TCL_OK; }
 
-bool queryHook() { return the_sta->epochs.syncForQuery(yosys_get_design()); }
-
-int tclBeforeEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
+void loadDesign(Design *design, Tcl_Obj *libs, const std::string &verilog, const std::string &top)
 {
-	the_sta->epochs.end();
-	return TCL_OK;
+	// a failed load must not leave the old network to the queries of this call
+	the_sta->epochs.stop();
+	Pass::call(design, "design -reset");
+	for (const std::string &lib : tclWords(libs))
+		Pass::call(design, std::vector<std::string>{"read_liberty", "-lib", lib});
+	Pass::call(design, std::vector<std::string>{"read_verilog", verilog});
+	Pass::call(design, std::vector<std::string>{"hierarchy", "-top", top});
+	Pass::call(design, "uniquify");
+	the_sta->epochs.link(design);
 }
 
-int tclAfterEdit(ClientData, Tcl_Interp *, int, Tcl_Obj *const[])
+// conformance only, the one place the design changes inside a call
+// quiet as tee -q, the .ok files have no yosys output
+int tclLoadDesign(ClientData, Tcl_Interp *interp, int objc, Tcl_Obj *const objv[])
 {
-	if (the_sta->autosync && yosys_get_design() != nullptr)
-		the_sta->epochs.sync(yosys_get_design());
-	return TCL_OK;
-}
-
-bool topHasScopes(Design *design)
-{
-	RTLIL::Module *top = nullptr;
-	for (RTLIL::Module *module : design->modules()) {
-		if (module->get_bool_attribute(ID::top))
-			top = module;
+	if (wrongArgCount(interp, objc, objv, 3, 3, "libs verilog top"))
+		return TCL_ERROR;
+	std::ostringstream log_stream;
+	auto log_scope = logger().sink_scope();
+	logger().clear_original();
+	// the error goes into the Tcl result
+	logger().add_sink<StreamLogSink>(log_stream);
+	auto guard = logger().error_throw_scope();
+	try {
+		loadDesign(yosys_get_design(), objv[1], Tcl_GetString(objv[2]), Tcl_GetString(objv[3]));
+	} catch (const log_cmd_error_exception &) {
+		std::string log_text = log_stream.str();
+		size_t error_at = std::min(log_text.rfind("ERROR: "), log_text.size());
+		std::string error = "ysta::load_design failed, " + log_text.substr(error_at);
+		Tcl_SetObjResult(interp, Tcl_NewStringObj(error.c_str(), -1));
+		return TCL_ERROR;
 	}
-	if (top == nullptr)
-		return true; // not known, keep the sync
-	for (RTLIL::Cell *cell : top->cells()) {
-		RTLIL::Module *type = design->module(cell->type);
-		if (type != nullptr && !type->get_blackbox_attribute())
-			return true;
-	}
-	return false;
-}
-
-void beforePass(Pass *pass, Design *design)
-{
-	// flatten keeps no name of a private-named scope, a checkpoint with the names of now keeps such a scope
-	// not for the map design of a techmap, a flat design has no scope to keep
-	bool is_flatten = pass->pass_name == "flatten" && design == yosys_get_design();
-	if (is_flatten && the_sta->track_barriers && topHasScopes(design))
-		the_sta->epochs.sync(design);
-	if (pass->pass_name != "opensta_net")
-		the_sta->epochs.end();
+	return TCL_OK;
 }
 
 void makeSta()
 {
-	Tcl_Interp *interp = yosys_get_tcl_interp();
+	// private and never deleted, OpenSTA keeps it
+	Tcl_Interp *interp = Tcl_CreateInterp();
+	// init.tcl only, no yosys commands
+	if (Tcl_Init(interp) != TCL_OK)
+		log_error("OpenSTA: Tcl_Init failed: %s\n", Tcl_GetStringResult(interp));
 	sta::initSta();
 	the_sta = new YosysSta;
 	sta::Sta::setSta(the_sta);
@@ -98,14 +96,14 @@ void bootTcl()
 	static const char *script =
 #include "trace.inc"
 	    ;
-	Tcl_Interp *interp = yosys_get_tcl_interp();
-	Tcl_CreateObjCommand(interp, "ysta::before_edit", tclBeforeEdit, nullptr, nullptr);
-	Tcl_CreateObjCommand(interp, "ysta::after_edit", tclAfterEdit, nullptr, nullptr);
+	Tcl_Interp *interp = the_sta->tclInterp();
 	Tcl_CreateObjCommand(interp, "ysta::resolve", tclResolve, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::moved_ends", tclMovedEnds, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::moved_arc", tclMovedArc, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::missing", tclMissing, nullptr, nullptr);
 	Tcl_CreateObjCommand(interp, "ysta::loss", tclLoss, nullptr, nullptr);
+	if (getenv("OPENSTA_NET_CONFORMANCE") != nullptr)
+		Tcl_CreateObjCommand(interp, "ysta::load_design", tclLoadDesign, nullptr, nullptr);
 	char *stale_net_names = reinterpret_cast<char *>(staNetwork().staleNetNamesFlag());
 	Tcl_LinkVar(interp, "::ysta::writing_sdc", stale_net_names, TCL_LINK_BOOLEAN);
 	if (!tclEval(script))
@@ -118,8 +116,7 @@ void bootSta()
 		return;
 	makeSta();
 	bootTcl();
-	Pass::pre_call_hooks.push_back(beforePass);
-	log("OpenSTA instance created on the Yosys Tcl interpreter.\n");
+	log("OpenSTA instance created on a private Tcl interpreter.\n");
 }
 
 size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
@@ -133,8 +130,6 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 	const std::map<std::string, bool *> flags = {
 		{"-link", &opt.link},
 		{"-sync", &opt.sync},
-		{"-autosync", &opt.autosync},
-		{"-protect", &opt.protect},
 		{"-unprotect", &opt.unprotect},
 	};
 	size_t argidx;
@@ -160,9 +155,6 @@ void linkOrSync(Design *design, const PassOptions &opt)
 		the_sta->epochs.link(design);
 		return;
 	}
-	if (!opt.sync && the_sta->epochs.stale())
-		log_warning("opensta_net: design changed since link, rebuilding the STA network "
-		            "and re-applying the constraints.\n");
 	the_sta->epochs.sync(design);
 }
 
@@ -188,15 +180,17 @@ void sourceFile(const std::string &file, const std::string &command, const std::
 		return;
 	std::string script = command + " {" + file + "}" + tail;
 	if (!tclEval(script))
-		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(yosys_get_tcl_interp()));
+		log_cmd_error("opensta_net: %s: %s\n", file.c_str(), Tcl_GetStringResult(the_sta->tclInterp()));
 }
 
 void evalTcl(const std::string &cmd)
 {
 	bool ok = tclEval(cmd);
-	const char *result = Tcl_GetStringResult(yosys_get_tcl_interp());
+	const char *result = Tcl_GetStringResult(the_sta->tclInterp());
 	if (!ok)
 		log_cmd_error("OpenSTA tcl error: %s\n", result);
+	// the Tcl result of yosys opensta_net -eval
+	yosys_get_design()->scratchpad_set_string("result.string", result);
 	if (result[0] != 0)
 		log("%s\n", result);
 }
@@ -206,7 +200,7 @@ void OpenstaNetPass::help()
 	//   |---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|---v---|
 	log("\n");
 	log("    opensta_net [options]\n\n");
-	log("Boot an embedded OpenSTA instance on the Yosys Tcl interpreter and keep its\n");
+	log("Boot an embedded OpenSTA instance on its own Tcl interpreter and keep its\n");
 	log("STA network in step with the design. OpenSTA network edits (replace_cell,\n");
 	log("connect_pin, ...) are refused, edit the design in yosys.\n\n");
 	log("    -liberty <file>\n");
@@ -216,23 +210,16 @@ void OpenstaNetPass::help()
 	log("        set of objects per use. Constraints are cleared.\n\n");
 	log("    -sync\n");
 	log("        if the design changed since the network was built, rebuild it and\n");
-	log("        apply the constraints again. Every call and every OpenSTA query\n");
-	log("        does this implicitly.\n\n");
-	log("    -autosync\n");
-	log("        also sync after each `yosys`, `rtlil::set_attr` or `rtlil::set_param`\n");
-	log("        command run from Tcl.\n\n");
-	log("    -protect\n");
-	log("        protect the objects again after -unprotect, the constraints stay.\n\n");
+	log("        apply the constraints again. Every call without -link does this first.\n\n");
 	log("    -unprotect\n");
-	log("        remove the barriers (before write_verilog) and put no new ones.\n");
-	log("        A later pass can remove a constrained object, the sync reports it.\n");
-	log("\n");
+	log("        remove the barriers (before write_verilog) and end the network.\n\n");
 	log("    -sdc <file>\n");
 	log("        read an SDC file with read_sdc.\n\n");
 	log("    -source <file>\n");
-	log("        source a Tcl file in the shared interpreter.\n\n");
+	log("        source a Tcl file in the OpenSTA interpreter.\n\n");
 	log("    -eval <tcl>\n");
-	log("        evaluate <tcl> in the shared interpreter and log the result.\n\n");
+	log("        evaluate <tcl> in the OpenSTA interpreter and log the result. In a\n");
+	log("        Yosys Tcl script, `yosys opensta_net -eval` returns the result.\n\n");
 }
 
 void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
@@ -243,17 +230,24 @@ void OpenstaNetPass::execute(std::vector<std::string> args, Design *design)
 	extra_args(args, argidx, design);
 
 	bootSta();
-	the_sta->autosync |= opt.autosync;
+	staNetwork().dropHierNames();
 	if (!opt.liberty_file.empty())
 		readLiberty(opt.liberty_file);
 	linkOrSync(design, opt);
-	sourceFile(opt.sdc_file, "read_sdc", "");
-	sourceFile(opt.source_file, "namespace eval ::sta {include_file", " 0 0}");
-	if (!opt.eval_cmd.empty())
-		evalTcl(opt.eval_cmd);
-	the_sta->track_barriers |= opt.protect;
+	try {
+		sourceFile(opt.sdc_file, "read_sdc", "");
+		sourceFile(opt.source_file, "namespace eval ::sta {include_file", " 0 0}");
+		if (!opt.eval_cmd.empty())
+			evalTcl(opt.eval_cmd);
+	} catch (...) {
+		// the commands before the error stay
+		the_sta->epochs.capture();
+		throw;
+	}
 	if (opt.unprotect)
 		the_sta->epochs.unprotect(design);
+	else
+		the_sta->epochs.capture();
 }
 
 OpenstaNetPass opensta_net_pass;

@@ -1,17 +1,12 @@
-# Tcl side of opensta_net, journals the constraint commands and applies them again after a rebuild
+# Tcl side of opensta_net, captures the constraint commands and applies them again after a rebuild
 namespace eval ::ysta::sdc {}
-namespace eval ::ysta::byname { namespace path ::ysta::sdc }
 namespace eval ::ysta {
-	# {mode cmd} that succeeded since the last capture
-	variable journal {}
-	# stack, a query in a command can sync and run commands
+	# stack, a command can run commands
 	variable entered {}
 	# {{mode family} cmd} that write_sdc omits, a capture adds them
 	variable kept {}
 	# {mode script} of the last capture, objects are tokens
 	variable captured {}
-	# {mode script} of uncaptured journal commands, objects are name getters
-	variable replay {}
 	# {mode pin} of hierarchical pin disables, write_sdc omits them
 	variable hier_disables {}
 	# from 1 on old clock handles and stale nets exist
@@ -48,7 +43,7 @@ namespace eval ::ysta {
 
 proc ::ysta::mode_exists {mode} { ::sta::is_object [::sta::find_mode $mode] }
 
-# a command can delete a clock, so a journal command has no clock handle, only a getter by name
+# a command can delete a clock, so a kept command has no clock handle, only a getter by name
 proc ::ysta::enter {cmd op} {
 	foreach clock [regexp -all -inline {\m_[0-9a-f]+_p_Clock\M} $cmd] {
 		set cmd [string map [list $clock [list "\[get_clocks [list [get_name $clock]]\]"]] $cmd]
@@ -59,7 +54,6 @@ proc ::ysta::record {cmd code result op} {
 	set named [lindex $::ysta::entered end]
 	set ::ysta::entered [lrange $::ysta::entered 0 end-1]
 	if {$code != 0} return
-	lappend ::ysta::journal [list [::sta::cmd_mode_name] $named]
 	keep [namespace tail [lindex $cmd 0]] $cmd $named
 }
 proc ::ysta::keep {name cmd named} {
@@ -94,9 +88,9 @@ proc ::ysta::activity_as_density {cmd} {
 	if {$at >= 0} { set cmd [lreplace $cmd $at $at+1] }
 	return $cmd
 }
-# remove_delay_slew_annotations undoes the set_assigned_* commands, also in the last capture and the journal
+# remove_delay_slew_annotations undoes the set_assigned_* commands, also in the kept commands and the last capture
 proc ::ysta::drop_assigned {args} {
-	foreach name {kept captured journal replay} {
+	foreach name {kept captured} {
 		set ::ysta::$name [lsearch -all -inline -not -regexp -index 1 [set ::ysta::$name] {^(::)?(sta::)?set_assigned_}]
 	}
 }
@@ -128,9 +122,8 @@ proc ::ysta::undo_hier_disables {} {
 	::sta::set_cmd_mode $cmd_mode
 }
 proc ::ysta::clear {} {
-	undo_hier_disables
 	array unset ::ysta::live_handles
-	foreach name {journal kept replay captured} { set ::ysta::$name {} }
+	foreach name {kept captured} { set ::ysta::$name {} }
 }
 
 proc ::ysta::split_commands {text} {
@@ -195,7 +188,7 @@ proc ::ysta::tightest_last {commands} {
 	foreach place $places sorted [lsort -real -index 0 $by_tightness] { lset commands $place [lindex $sorted 1] }
 	return $commands
 }
-# an error keeps the last capture and the journal, the sync then runs the journal by name
+# an error keeps the last capture
 proc ::ysta::capture {args} {
 	set written {}
 	foreach mode $args {
@@ -217,38 +210,35 @@ proc ::ysta::capture {args} {
 		if {$mode in $args} { lappend kept [list $mode [named [lindex $item 1]]] }
 	}
 	set ::ysta::captured [list {*}$written {*}$kept {*}$late]
-	set ::ysta::journal {}
 }
 
 # get_full_name of a pin, a cell, a net or a top port gives a token in a capture
-proc ::ysta::object_word {object getters} {
+proc ::ysta::object_word {object} {
 	set name [list [get_full_name $object]]
-	set type [::sta::object_type $object]
-	if {![dict exists $getters $type]} { set type other }
-	if {![dict exists $getters $type]} { return $name }
-	return "\[[dict get $getters $type] $name\]"
+	if {[::sta::object_type $object] ne "Clock"} { return $name }
+	return "\[get_clocks $name\]"
 }
-proc ::ysta::names {word getters} {
+proc ::ysta::names {word} {
 	# a clock getter of enter stays
 	if {[string match {\[get_clocks *\]} $word]} { return [list $word] }
-	if {[::sta::is_object $word]} { return [list [object_word $word $getters]] }
+	if {[::sta::is_object $word]} { return [list [object_word $word]] }
 	if {[catch {llength $word}] || [lindex $word 0] eq $word} return
 	set words {}
 	set has_object 0
 	foreach item $word {
-		set names [names $item $getters]
+		set names [names $item]
 		if {$names ne {}} { set has_object 1 }
 		if {$names eq {}} { set names [list [list $item]] }
 		lappend words {*}$names
 	}
 	if {$has_object} { return $words }
 }
-proc ::ysta::named {cmd {getters {Clock get_clocks}}} {
+proc ::ysta::named {cmd} {
 	if {[catch {llength $cmd}]} { return $cmd }
 	lset cmd 0 [namespace tail [lindex $cmd 0]]
 	set script {}
 	foreach word $cmd {
-		set names [names $word $getters]
+		set names [names $word]
 		switch [llength $names] {
 			0 { lappend script [list $word] }
 			1 { lappend script [lindex $names 0] }
@@ -257,29 +247,13 @@ proc ::ysta::named {cmd {getters {Clock get_clocks}}} {
 	}
 	join $script
 }
-# runs before the link, while a handle still gives its name
-proc ::ysta::name_journal {} {
-	# the link frees the clocks and edges also when it fails
-	array unset ::ysta::live_handles
-	set getters {
-		Clock get_clocks Pin get_pins Instance get_cells Net get_nets Port get_ports
-		LibertyCell get_lib_cells LibertyLibrary get_libs other ::ysta::missing
-	}
-	foreach item $::ysta::journal {
-		lappend ::ysta::replay [list [lindex $item 0] [named [lindex $item 1] $getters]]
-	}
-	set ::ysta::journal {}
-}
-# a getter of a journal script takes the exact name with no wildcards, a name with no object is missing
+# a getter takes the exact name with no wildcards, a name with no object is missing
 proc ::ysta::exact {finder name} {
 	set object [$finder $name]
 	if {$object ne "NULL"} { return [list $object] }
 	missing $name
 }
 proc ::ysta::find_port {name} { [[::sta::top_instance] cell] find_port $name }
-foreach {getter finder} {
-	get_pins ::sta::find_pin get_cells ::sta::find_instance get_nets ::sta::find_net get_ports ::ysta::find_port
-} { interp alias {} ::ysta::byname::$getter {} ::ysta::exact $finder }
 
 # a getter of a captured script gives its tokens back, ::ysta::run resolves them
 foreach getter {get_pins get_cells get_nets get_ports} { interp alias {} ::ysta::sdc::$getter {} ::ysta::sdc::list }
@@ -372,14 +346,13 @@ proc ::ysta::run_scripts {space scripts} {
 		if {![mode_exists $mode]} continue
 		::sta::set_cmd_mode $mode
 		set failed [catch {namespace eval $space $text} error]
-		# one line for the log text, a user word of a kept or replay script can have a backslash-newline
+		# one line for the log text, a user word of a kept script can have a backslash-newline
 		set log_text [string trim [regsub -all {\s+} [string map {"\\\n" " "} $text] { }]]
 		incr lost [loss $failed $error $log_text]
 	}
 	return $lost
 }
 proc ::ysta::apply {} {
-	incr ::ysta::rebuilds
 	set scene [::sta::cmd_scene]
 	set cmd_mode [::sta::cmd_mode_name]
 	# sta_warn and sta_error add the script file and line to messages
@@ -387,10 +360,6 @@ proc ::ysta::apply {} {
 	info script {}
 	set ::ysta::kept {}
 	set lost [run_scripts ::ysta::sdc $::ysta::captured]
-	# captured commands are journaled again, only a replayed one stays in the journal for the next capture
-	set ::ysta::journal {}
-	incr lost [run_scripts ::ysta::byname $::ysta::replay]
-	set ::ysta::replay {}
 	# the scene sets its own mode
 	::sta::set_cmd_scene $scene
 	::sta::set_cmd_mode $cmd_mode
@@ -415,8 +384,6 @@ foreach {why cmds} {
 	{it would clear the constraints, opensta_net -sync rebuilds the network.} network_changed
 	{the STA instance belongs to opensta_net.} delete_all_memory
 } { foreach cmd $cmds { proc ::sta::$cmd {args} [list error "Error: 2929 [regsub {_cmd$} $cmd {}]: $why"] } }
-foreach cmd {rtlil::set_attr rtlil::set_param} { trace add execution $cmd enter ::ysta::before_edit }
-foreach cmd {yosys rtlil::set_attr rtlil::set_param} { trace add execution $cmd leave ::ysta::after_edit }
 
 # Sdc::clear keeps the resistance and voltage of nets of an earlier network, we drop their stale name lines
 proc ::ysta::drop_stale_lines {path gzip} {
@@ -454,24 +421,22 @@ proc ::ysta::note_handles {cmd code result op} {
 foreach cmd {get_clocks find_clock get_property get_timing_edges} {
 	trace add execution ::sta::$cmd leave ::ysta::note_handles
 }
-# a query syncs first so the next capture has the command, we refuse a handle that no getter gave since the rebuild
-proc ::ysta::sync_first {cmd op} {
-	::sta::network_is_linked
+# we refuse a handle that no getter gave since the rebuild
+proc ::ysta::check_handles {cmd op} {
 	foreach {handle type} [regexp -all -inline {\m_[0-9a-f]+_p_(Clock|Edge)\M} $cmd] {
 		if {[info exists ::ysta::live_handles($handle)]} continue
 		set object [dict get {Clock clock Edge {timing edge}} $type]
 		error "Error: 2931 a $object handle of an earlier network names no object, get the $object again."
 	}
 }
-foreach cmd {get_clocks all_clocks} { trace add execution ::sta::$cmd enter ::ysta::sync_first }
 # traces and no wrapper procs, namespace import binds the command, so a rename leaves the import unwrapped
 foreach cmd [array names ::sta::cmd_args] {
 	if {![regexp {^(create_|set_|unset_|delete_|group_path)} $cmd]} continue
 	if {$cmd in {delete_from_list delete_instance delete_net set_cmd_units set_mode set_scene}} continue
 	if {[info commands ::sta::$cmd] eq {}} continue
 	trace add execution ::sta::$cmd enter ::ysta::enter
-	# the last trace runs first, a sync inside it runs commands of this name, they skip only a trace that runs
-	trace add execution ::sta::$cmd enter ::ysta::sync_first
+	# the last trace runs first, a refused handle then leaves nothing in entered
+	trace add execution ::sta::$cmd enter ::ysta::check_handles
 	trace add execution ::sta::$cmd leave ::ysta::record
 	interp alias {} ::ysta::sdc::$cmd {} ::ysta::run $cmd
 }

@@ -115,9 +115,6 @@ void YosysNetwork::refuseHandle() const
 	report_->error(2931, "a handle of an earlier network names no object, get the object again.");
 }
 
-// OpenSTA asks before each network read, see Sta::ensureLinked
-bool YosysNetwork::isLinked() const { return open_epoch_hook_(); }
-
 // one stable token per object, write_sdc sorts by name
 std::string YosysNetwork::token(Handle handle) const
 {

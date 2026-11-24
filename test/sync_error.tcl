@@ -7,8 +7,8 @@ yosys chtype -set FOO top/u_inv1
 set log [log_of opensta_net -sync]
 check_eq [count_lines $log {ERROR: NetView: no port model for cell type FOO (cell u_inv1).}] 1
 check_eq [count_lines $log {*cannot rebuild the STA network (*}] 1
-# a query outside a yosys command starts the same build, it must not end yosys
-check_eq [count_lines [error_of {get_cells *}] {*No network has been linked.}] 1
+# the next call builds again and fails, its query sees no network
+check_eq [count_lines [error_of {log_of opensta_net -eval {get_cells *}}] {*No network has been linked.}] 1
 yosys chtype -set INV top/u_inv1
 check_eq [sync_losses [log_of opensta_net -sync]] 0
 check_eq [format %.2f [worst_slack -max]] 8.60

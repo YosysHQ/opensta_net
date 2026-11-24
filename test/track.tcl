@@ -1,4 +1,4 @@
-# track.sdc on a mapped design survives autoname, flatten and -unprotect
+# track.sdc on a mapped design survives autoname and flatten, -unprotect leaves no barrier
 source test/lib/check.tcl
 proc track {passes} {
 	link_track
@@ -14,6 +14,6 @@ check_eq [lost_cmds $log] {}
 set log [track {flatten}]
 check_eq [lost_cmds $log] {}
 set log [track {flatten {opensta_net -unprotect} {select -assert-none t:$barrier}}]
-# -unprotect syncs before and after it removes the barriers
-check_eq [sync_losses $log] {0 0}
+# -unprotect syncs before it removes the barriers
+check_eq [sync_losses $log] {0}
 check_eq [lost_cmds $log] {}

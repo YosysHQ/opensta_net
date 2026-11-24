@@ -381,7 +381,7 @@ foreach {why cmds} {
 	{network edits are not supported, edit the design in yosys.}
 	{read_verilog_cmd clear_network make_instance_cmd delete_instance_cmd replace_cell_cmd make_net_cmd
 	 delete_net_cmd connect_pin_cmd disconnect_pin_cmd make_port_pin_cmd}
-	{it would clear the constraints, opensta_net -sync rebuilds the network.} network_changed
+	{it would clear the constraints, the next opensta_net call rebuilds the network.} network_changed
 	{the STA instance belongs to opensta_net.} delete_all_memory
 } { foreach cmd $cmds { proc ::sta::$cmd {args} [list error "Error: 2929 [regsub {_cmd$} $cmd {}]: $why"] } }
 

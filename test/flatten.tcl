@@ -22,7 +22,7 @@ check_eq [objects {}] $objects
 check_eq [names [get_nets -of_objects [get_pins u1/r/Q]]] u1/y
 set sdc [written_sdc]
 yosys flatten
-check_eq [lost_cmds [log_of opensta_net -sync]] {}
+check_eq [lost_cmds [log_of opensta_net]] {}
 # flatten dissolves the scopes, timing and SDC stay
 set flat {u1/u2/ u1.u2. u1/ u1.}
 check_eq [objects $flat] [string map $flat $objects]

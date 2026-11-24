@@ -129,7 +129,6 @@ size_t parseOptions(const std::vector<std::string> &args, PassOptions &opt)
 	};
 	const std::map<std::string, bool *> flags = {
 		{"-link", &opt.link},
-		{"-sync", &opt.sync},
 		{"-unprotect", &opt.unprotect},
 	};
 	size_t argidx;
@@ -208,9 +207,6 @@ void OpenstaNetPass::help()
 	log("    -link\n");
 	log("        build the network from scratch. A module used more than once gets one\n");
 	log("        set of objects per use. Constraints are cleared.\n\n");
-	log("    -sync\n");
-	log("        if the design changed since the network was built, rebuild it and\n");
-	log("        apply the constraints again. Every call without -link does this first.\n\n");
 	log("    -unprotect\n");
 	log("        remove the barriers (before write_verilog) and end the network.\n\n");
 	log("    -sdc <file>\n");

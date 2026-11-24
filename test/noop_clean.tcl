@@ -9,6 +9,6 @@ yosys opt_clean -purge
 check_eq [count_lines [log_of opensta_net -liberty $sky130 -link] {opensta_net: built network: *}] 1
 # it rewrites connections, the view stays valid, no rebuild
 yosys opt_clean
-check_eq [sync_losses [log_of opensta_net -sync]] {}
+check_eq [sync_losses [log_of opensta_net]] {}
 yosys opt_clean -purge
-check_eq [sync_losses [log_of opensta_net -sync]] {}
+check_eq [sync_losses [log_of opensta_net]] {}

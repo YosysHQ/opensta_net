@@ -9,5 +9,5 @@ yosys cd top; yosys rename pa {$a}; yosys rename pb {$b}; yosys rename t {$t}; y
 yosys opensta_net -liberty test/data/simple.lib -link
 set_disable_timing [get_cells {$a/s/c}]
 yosys flatten -noscopeinfo
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [count_lines [written_sdc] {set_disable_timing [get_cells {$a/s/c}]}] 1

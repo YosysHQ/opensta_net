@@ -11,7 +11,7 @@ set_disable_timing [get_cells {$u1/b/j}]
 set_max_delay 1 -through [get_nets {$u1/b/n}]
 set_false_path -through [get_pins {$u1/c/k/A}]
 yosys flatten -noscopeinfo
-check_eq [lost_cmds [log_of opensta_net -sync]] {}
+check_eq [lost_cmds [log_of opensta_net]] {}
 set sdc [written_sdc]
 check_eq [count_lines $sdc {set_disable_timing [get_cells {$u1/b.j}]}] 1
 check_eq [count_lines $sdc {set_max_delay -through [get_nets {$u1/b.n}] 1.0000}] 1

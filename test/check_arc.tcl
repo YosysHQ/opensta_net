@@ -15,9 +15,9 @@ module dff_split(input D, input C, output Q);
   \$_NOT_ inv(.A(C), .Y(cn));
   \$_DFF_N_ ff(.D(D), .C(cn), .Q(Q));
 endmodule}]
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [llength [find_timing_paths -from [get_ports a]]] 0
 # the edge is in the SDC, so it stays over the next sync
 yosys add -wire w top
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [llength [find_timing_paths -from [get_ports a]]] 0

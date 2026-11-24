@@ -12,5 +12,5 @@ set_case_analysis 1 [get_pins u/a]
 # a -through output keeps the paths that leave
 # a case value goes on the loads inside
 yosys flatten
-check_eq [lost_cmds [log_of opensta_net -sync]] {}
+check_eq [lost_cmds [log_of opensta_net]] {}
 check_eq [[find_timing_paths -from [get_cells u.r_reg] -to [get_cells u.r_reg]] is_path_delay] 0

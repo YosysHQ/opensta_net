@@ -15,5 +15,5 @@ set_false_path -through [get_cells u_inv1]
 yosys design -reset
 yosys read_rtlil $path
 yosys hierarchy -top top
-check_eq [sync_losses [log_of opensta_net -sync]] 1
+check_eq [sync_losses [log_of opensta_net]] 1
 check_eq [regexp -all {u_inv} [written_sdc]] 0

@@ -8,5 +8,5 @@ set log [error_of {log_of opensta_net -source [temp_file {
 }]}]
 check_eq [count_lines $log {* sourced  .}] 1
 yosys add -wire w top
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [count_lines [written_sdc] {set_false_path -through [get_pins {u_inv1/Y}]}] 1

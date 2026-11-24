@@ -14,7 +14,7 @@ yosys dfflibmap -liberty $nangate
 yosys abc -liberty $nangate
 yosys insbuf -buf BUF_X1 A Z
 # the sync keeps the -from edge, -to endpoints, arc ports, timing edge
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 set sdc [written_sdc]
 check_eq [count_lines $sdc {set_false_path -fall_from [get_pins {rn_reg/CK}]}] 1
 check_eq [count_lines $sdc {set_false_path -to [get_pins {s_reg/D}]}] 1

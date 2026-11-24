@@ -8,5 +8,5 @@ set_input_delay -clock c* 1 [get_ports -of_objects [get_nets -of_objects [get_pi
 set_input_delay -clock {a\b} 2 [get_ports yAz]
 set sdc [written_sdc]
 yosys add -wire dummy top
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [written_sdc] $sdc

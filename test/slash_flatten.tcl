@@ -4,5 +4,5 @@ link_top test/data/slash.v
 set_disable_timing [get_cells {u\/q/b/j}]
 yosys setattr -set keep_hierarchy 1 top/u
 yosys flatten
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [count_lines [written_sdc] {set_disable_timing*}] 1

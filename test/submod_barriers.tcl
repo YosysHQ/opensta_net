@@ -6,7 +6,7 @@ set_min_delay 0.1 -through [get_pins u_inv1/Y]
 set_max_delay 5 -through [get_nets n1]
 set_false_path -through [get_pins u_inv2/A]
 yosys submod -name grp {top/t:$barrier}
-check_eq [lost_cmds [log_of opensta_net -sync]] {}
+check_eq [lost_cmds [log_of opensta_net]] {}
 set sdc [written_sdc]
 check_eq [count_lines $sdc {set_min_delay -through [get_pins {u_inv1/Y}] 0.1000}] 1
 check_eq [count_lines $sdc {set_max_delay -through [get_nets {grp/n2}] 5.0000}] 1

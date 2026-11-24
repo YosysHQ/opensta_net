@@ -9,7 +9,7 @@ proc assigned {} {
 }
 proc rebuild {} {
 	yosys add -wire extra[incr ::wires] 1
-	check_eq [sync_losses [log_of opensta_net -sync]] 0
+	check_eq [sync_losses [log_of opensta_net]] 0
 }
 set_assigned_delay -cell -from [get_pins u_inv1/A] -to [get_pins u_inv1/Y] 0.5
 set_assigned_check -setup -from [get_pins u_dff0/CLK] -to [get_pins u_dff0/D] 0.7

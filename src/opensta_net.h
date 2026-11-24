@@ -50,7 +50,7 @@ struct YosysSta : public sta::Sta {
 
 struct PassOptions {
 	std::string eval_cmd, liberty_file, source_file, sdc_file;
-	bool link = false, sync = false, unprotect = false;
+	bool link = false, unprotect = false;
 };
 
 bool tclEval(const std::string &script);

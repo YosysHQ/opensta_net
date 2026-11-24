@@ -12,6 +12,6 @@ yosys techmap -map [temp_file {module HA_X1(input A, input B, output CO, output 
   OR2_X1 any(.A1(A), .A2(B), .ZN(m));
   AND2_X1 sum(.A1(m), .A2(n), .ZN(S));
 endmodule}]
-set log [log_of opensta_net -sync]
+set log [log_of opensta_net]
 check_eq [llength [find_timing_paths -from [get_ports a] -to [get_ports co] -unconstrained]] 1
 check_eq [lost_cmds $log] {{set_disable_timing -from {A} -to {S} [get_cells {ha}]}}

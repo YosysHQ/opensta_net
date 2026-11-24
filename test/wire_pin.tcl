@@ -14,7 +14,7 @@ set_sense -stop_propagation -clocks [get_clocks clk] $mux_y
 set_max_delay 3 -from $mux_y
 set_output_delay 1 -clock clk [get_ports q]
 yosys opt_expr -mux_undef
-set log [log_of opensta_net -sync]
+set log [log_of opensta_net]
 check_eq [sync_losses $log] 0
 check_eq [llength [all_clocks]] 2
 check_eq [count_lines [written_sdc] {set_clock_latency 0.3000 [get_pins {*/C}]}] 1

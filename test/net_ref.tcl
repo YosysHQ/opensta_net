@@ -13,7 +13,7 @@ foreach buf {BUF4 INV} {
 	set lost {}
 	foreach pass [list opt_clean "insbuf -buf $buf A Y" opt_clean {opt_clean -purge}] {
 		yosys {*}$pass
-		lappend lost {*}[lost_cmds [log_of opensta_net -sync]]
+		lappend lost {*}[lost_cmds [log_of opensta_net]]
 	}
 	check_eq $lost {}
 	check_eq [count_lines [written_sdc] {set_max_delay -through [get_nets {i_cdc.i_dst.async_data_i}] 5.0000}] 1

@@ -6,6 +6,6 @@ set_max_delay -pro -from [get_ports in] -to [get_pins u_dff0/D] 3
 set_clock_latency -source 1 [get_clocks clk]
 set probe [get_property [lindex [find_timing_paths -from [get_ports in] -to [get_pins u_dff0/D]] 0] slack]
 yosys add -wire extra top
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [get_property [lindex [find_timing_paths -from [get_ports in] -to [get_pins u_dff0/D]] 0] slack] $probe
 check_eq [sta {llength $::ysta::kept}] 1

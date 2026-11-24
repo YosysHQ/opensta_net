@@ -5,7 +5,7 @@ proc track {passes} {
 	yosys opensta_net -sdc test/data/track.sdc
 	set log {}
 	foreach pass $passes { append log [log_of {*}$pass] }
-	append log [log_of opensta_net -sync]
+	append log [log_of opensta_net]
 	return $log
 }
 set log [track {autoname}]

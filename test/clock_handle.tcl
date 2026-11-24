@@ -7,7 +7,7 @@ set_input_delay -network_latency_included -clock [get_clocks c] 1 [get_ports in]
 # a clock on the pin of c deletes c, the new clock gets its memory
 create_clock -name later -period 5 [get_ports clk]
 yosys add -wire w top
-set log [log_of opensta_net -sync]
+set log [log_of opensta_net]
 check_eq [sync_losses $log] 1
 check_eq [count_lines $log "*lost or changed: no object found for c"] 1
 check_eq [count_lines [written_sdc] {set_input_delay*}] 0
@@ -18,7 +18,7 @@ create_clock -name virt -period 10
 yosys add -wire dummy top
 set_clock_uncertainty 0.5 virt
 yosys add -wire dummy2 top
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [llength [all_clocks]] 1
 set held [get_clocks virt]
 yosys add -wire dummy3 top

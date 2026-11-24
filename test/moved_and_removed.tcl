@@ -6,4 +6,4 @@ yosys delete top/s_reg
 # dfflibmap puts a mux before D of re
 yosys dfflibmap -liberty $nangate
 yosys abc -liberty $nangate
-check_eq [count_lines [log_of opensta_net -sync] {*lost or changed: applied without s_reg/D}] 1
+check_eq [count_lines [log_of opensta_net] {*lost or changed: applied without s_reg/D}] 1

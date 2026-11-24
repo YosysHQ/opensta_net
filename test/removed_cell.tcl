@@ -13,7 +13,7 @@ set_disable_timing -from A -to Y [get_cells -of_objects [get_pins -of_objects [g
 # abc -g cmos2 maps the and to two cells
 yosys opt_expr -mux_undef
 yosys abc -g cmos2
-check_eq [sync_losses [log_of opensta_net -sync]] 0
+check_eq [sync_losses [log_of opensta_net]] 0
 check_eq [llength [find_timing_paths -from [get_ports b] -to [get_ports y] -unconstrained]] 1
 check_eq [llength [find_timing_paths -from [get_ports a] -to [get_ports y] -unconstrained]] 0
 set sdc [written_sdc]

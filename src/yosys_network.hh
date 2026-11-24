@@ -3,7 +3,7 @@
 
 // YosysNetwork shows one Yosys::NetView to OpenSTA
 
-#include "kernel/nettrack.h"
+#include "kernel/netview/nettrack.h"
 
 #include "sta/ConcreteLibrary.hh"
 #include "sta/ConcreteNetwork.hh"

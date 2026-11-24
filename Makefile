@@ -5,7 +5,7 @@ YOSYS_BUILD := $(abspath $(YOSYS_SRC))/build
 YOSYS_CONFIG := $(YOSYS_BUILD)/yosys-config
 YOSYS := $(YOSYS_BUILD)/yosys
 STA_ROOT := $(abspath $(OPENSTA))
-YOSYS_HEADERS = $(wildcard $(YOSYS_BUILD)/share/include/kernel/*.h)
+YOSYS_HEADERS = $(wildcard $(YOSYS_BUILD)/share/include/kernel/*.h $(YOSYS_BUILD)/share/include/kernel/netview/*.h)
 
 STA_LIBS = $(STA_ROOT)/build/sta_swig.a $(STA_ROOT)/build/libOpenSTA.a
 STA_INC = -I$(STA_ROOT)/include -I$(STA_ROOT)/include/sta -I$(STA_ROOT)/build/include/sta

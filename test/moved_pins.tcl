@@ -6,6 +6,7 @@ set_false_path -rise_from [get_pins rn_reg/C]
 set_false_path -to [get_pins {re_reg/D s_reg/D}]
 set_max_delay 9 -from [get_pins rn_reg/C]
 set_disable_timing -from C -to Q [get_cells s_reg]
+set_disable_timing [get_cells re_reg]
 set_disable_timing [get_timing_edges -from [get_pins rn_reg/C] -to [get_pins rn_reg/Q]]
 group_path -name g -to [get_pins re_reg/D]
 # dfflibmap puts an inverter before the rn clock
@@ -23,3 +24,5 @@ check_eq [count_lines $sdc {group_path -name g -through [get_pins {*/B}] -to [ge
 check_eq [count_lines $sdc {set_max_delay -from [get_pins {rn_reg/CK}] 9.0000}] 1
 check_eq [count_lines $sdc {set_disable_timing -from {CK} -to {Q} [get_cells {s_reg}]}] 1
 check_eq [count_lines $sdc {set_disable_timing [get_timing_edges -from [get_pins {rn_reg/CK}] -to [get_pins {rn_reg/Q}]]}] 1
+check_eq [count_lines $sdc {set_disable_timing [get_cells {re_reg}]}] 1
+check_eq [count_lines $sdc {set_disable_timing [get_cells *}] 1

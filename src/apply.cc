@@ -71,6 +71,7 @@ void appendFound(const SdcObjectRef &ref, WireAs wire_as, Tcl_Obj *objects)
 	bool on_leaf_pins = has_pin && ref.pins[0]->inst->isLeaf();
 	bool is_changed_form = ref.was_hier && on_leaf_pins && wire_as == WireAs::None;
 	the_sta->loss.changed = the_sta->loss.changed || is_changed_form;
+	the_sta->loss.partial = the_sta->loss.partial || ref.partial;
 	if (!ref.isWire() || wire_as != WireAs::Edges) {
 		handleList(found, objects);
 		return;
@@ -464,6 +465,8 @@ std::string lossReason(const CommandLoss &loss, bool failed, const std::string &
 		return "failed: " + error;
 	if (!loss.missing.empty())
 		return "applied without" + loss.missing;
+	if (loss.partial)
+		return "applied, but a wire or other logic drives an old output";
 	if (loss.changed)
 		return "applied on the leaf pins";
 	return "";

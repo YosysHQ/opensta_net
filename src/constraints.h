@@ -37,6 +37,7 @@ struct CommandLoss {
 	bool empty_word = false; // a token word found no object, not run
 	bool vacuous = false;    // new logic has no path of it, not run, no loss
 	bool changed = false;    // a hier pin or net is its leaf pins now
+	bool partial = false;    // a wire or other logic drives an old output of a cell
 	std::string missing;     // names of refs with no object
 };
 
